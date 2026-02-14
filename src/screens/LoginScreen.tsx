@@ -16,7 +16,7 @@ import {
 import { useAuth } from '../lib/AuthContext';
 
 
-export default function LoginScreen() {
+export default function LoginScreen({ navigation }: any) {
     const [aadhaar, setAadhaar] = useState('');
     const [otp, setOtp] = useState('');
     const [step, setStep] = useState<'aadhaar' | 'otp'>('aadhaar');
@@ -149,14 +149,21 @@ export default function LoginScreen() {
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
             <ScrollView contentContainerStyle={styles.scrollContent}>
+                {/* Back to Home */}
+                <TouchableOpacity
+                    style={styles.backToHome}
+                    onPress={() => navigation.goBack()}
+                >
+                    <Text style={styles.backToHomeText}>← Back to Home</Text>
+                </TouchableOpacity>
+
                 {/* Header */}
                 <View style={styles.header}>
-                    {/* Placeholder logo - replace with actual image later */}
                     <View style={styles.logoPlaceholder}>
                         <Text style={styles.logoText}>AP</Text>
                     </View>
-                    <Text style={styles.title}>One State - One Card</Text>
-                    <Text style={styles.subtitle}>Government of Andhra Pradesh</Text>
+                    <Text style={styles.title}>Worker Login</Text>
+                    <Text style={styles.subtitle}>Enter your Aadhaar to access your dashboard</Text>
                 </View>
 
                 {/* Login Form */}
@@ -292,6 +299,15 @@ const styles = StyleSheet.create({
         flexGrow: 1,
         justifyContent: 'center',
         padding: 24,
+    },
+    backToHome: {
+        alignSelf: 'flex-start',
+        marginBottom: 16,
+    },
+    backToHomeText: {
+        color: '#ea580c',
+        fontSize: 14,
+        fontWeight: '500',
     },
     header: {
         alignItems: 'center',
