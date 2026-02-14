@@ -10,6 +10,8 @@ import {
     Alert,
     Platform,
     KeyboardAvoidingView,
+    Modal,
+    FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { INDIA_LOCATIONS } from '../data/india-locations';
@@ -97,6 +99,84 @@ function PickerButtons({ options, value, onSelect, label }: {
                     </TouchableOpacity>
                 ))}
             </View>
+        </View>
+    );
+}
+
+function DropdownPicker({ options, value, onSelect, label, placeholder }: {
+    options: string[];
+    value: string;
+    onSelect: (v: string) => void;
+    label: string;
+    placeholder?: string;
+}) {
+    const [visible, setVisible] = useState(false);
+    const [search, setSearch] = useState('');
+
+    const filtered = search
+        ? options.filter(o => o.toLowerCase().includes(search.toLowerCase()))
+        : options;
+
+    return (
+        <View style={styles.dropdownContainer}>
+            <Text style={styles.label}>{label}</Text>
+            <TouchableOpacity
+                style={styles.dropdownButton}
+                onPress={() => { setVisible(true); setSearch(''); }}
+            >
+                <Text style={value ? styles.dropdownButtonText : styles.dropdownPlaceholder}>
+                    {value || placeholder || `Select ${label.replace(' *', '')}`}
+                </Text>
+                <Text style={styles.dropdownArrow}>▼</Text>
+            </TouchableOpacity>
+            <Modal visible={visible} transparent animationType="slide">
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setVisible(false)}
+                >
+                    <View style={styles.dropdownModal}>
+                        <View style={styles.dropdownHeader}>
+                            <Text style={styles.dropdownTitle}>Select {label.replace(' *', '')}</Text>
+                            <TouchableOpacity onPress={() => setVisible(false)}>
+                                <Text style={styles.dropdownClose}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+                        {options.length > 10 && (
+                            <TextInput
+                                style={styles.dropdownSearch}
+                                placeholder="Search..."
+                                value={search}
+                                onChangeText={setSearch}
+                                autoFocus
+                            />
+                        )}
+                        <FlatList
+                            data={filtered}
+                            keyExtractor={item => item}
+                            style={styles.dropdownList}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={[
+                                        styles.dropdownItem,
+                                        value === item && styles.dropdownItemSelected,
+                                    ]}
+                                    onPress={() => { onSelect(item); setVisible(false); }}
+                                >
+                                    <Text style={[
+                                        styles.dropdownItemText,
+                                        value === item && styles.dropdownItemTextSelected,
+                                    ]}>{item}</Text>
+                                    {value === item && <Text style={styles.dropdownCheck}>✓</Text>}
+                                </TouchableOpacity>
+                            )}
+                            ListEmptyComponent={
+                                <Text style={styles.dropdownEmpty}>No results found</Text>
+                            }
+                        />
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </View>
     );
 }
@@ -421,45 +501,32 @@ export default function WorkerRegistrationScreen({ navigation }: any) {
     const renderStep4 = () => (
         <View>
             <Text style={styles.sectionTitle}>Address Details</Text>
-            <Text style={styles.label}>District *</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                {districts.map(d => (
-                    <TouchableOpacity key={d}
-                        style={[styles.chip, form.district === d && styles.chipSelected]}
-                        onPress={() => { updateForm('district', d); updateForm('mandal', ''); updateForm('village', ''); }}>
-                        <Text style={[styles.chipText, form.district === d && styles.chipTextSelected]}>{d}</Text>
-                    </TouchableOpacity>
-                ))}
-            </ScrollView>
+            <DropdownPicker
+                label="District *"
+                options={districts}
+                value={form.district}
+                onSelect={d => { updateForm('district', d); updateForm('mandal', ''); updateForm('village', ''); }}
+                placeholder="Select District"
+            />
 
             {form.district ? (
-                <>
-                    <Text style={styles.label}>Mandal *</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                        {mandals.map(m => (
-                            <TouchableOpacity key={m}
-                                style={[styles.chip, form.mandal === m && styles.chipSelected]}
-                                onPress={() => { updateForm('mandal', m); updateForm('village', ''); }}>
-                                <Text style={[styles.chipText, form.mandal === m && styles.chipTextSelected]}>{m}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </>
+                <DropdownPicker
+                    label="Mandal *"
+                    options={mandals}
+                    value={form.mandal}
+                    onSelect={m => { updateForm('mandal', m); updateForm('village', ''); }}
+                    placeholder="Select Mandal"
+                />
             ) : null}
 
             {form.mandal ? (
-                <>
-                    <Text style={styles.label}>Village</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                        {villages.map(v => (
-                            <TouchableOpacity key={v}
-                                style={[styles.chip, form.village === v && styles.chipSelected]}
-                                onPress={() => updateForm('village', v)}>
-                                <Text style={[styles.chipText, form.village === v && styles.chipTextSelected]}>{v}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </>
+                <DropdownPicker
+                    label="Village"
+                    options={villages}
+                    value={form.village}
+                    onSelect={v => updateForm('village', v)}
+                    placeholder="Select Village"
+                />
             ) : null}
 
             <Text style={styles.label}>Pincode</Text>
@@ -750,31 +817,103 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         fontSize: 14,
     },
-    // Chips (for location selection)
-    chipScroll: {
+    // Dropdown Picker
+    dropdownContainer: {
         marginBottom: 12,
-        maxHeight: 44,
     },
-    chip: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 20,
+    dropdownButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         borderWidth: 1,
         borderColor: '#e2e8f0',
+        borderRadius: 8,
+        padding: 12,
         backgroundColor: '#f8fafc',
-        marginRight: 8,
     },
-    chipSelected: {
-        backgroundColor: '#ea580c',
-        borderColor: '#ea580c',
+    dropdownButtonText: {
+        fontSize: 14,
+        color: '#1e293b',
     },
-    chipText: {
-        fontSize: 12,
+    dropdownPlaceholder: {
+        fontSize: 14,
+        color: '#94a3b8',
+    },
+    dropdownArrow: {
+        fontSize: 10,
+        color: '#94a3b8',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'flex-end',
+    },
+    dropdownModal: {
+        backgroundColor: '#fff',
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        maxHeight: '60%',
+        paddingBottom: 20,
+    },
+    dropdownHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#e2e8f0',
+    },
+    dropdownTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#1e293b',
+    },
+    dropdownClose: {
+        fontSize: 18,
         color: '#64748b',
+        padding: 4,
     },
-    chipTextSelected: {
-        color: '#fff',
+    dropdownSearch: {
+        margin: 12,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 14,
+        backgroundColor: '#f8fafc',
+    },
+    dropdownList: {
+        paddingHorizontal: 8,
+    },
+    dropdownItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+    },
+    dropdownItemSelected: {
+        backgroundColor: '#fff7ed',
+    },
+    dropdownItemText: {
+        fontSize: 14,
+        color: '#1e293b',
+    },
+    dropdownItemTextSelected: {
+        color: '#ea580c',
         fontWeight: '600',
+    },
+    dropdownCheck: {
+        fontSize: 16,
+        color: '#ea580c',
+        fontWeight: '700',
+    },
+    dropdownEmpty: {
+        textAlign: 'center',
+        color: '#94a3b8',
+        padding: 20,
+        fontSize: 14,
     },
     // Review
     reviewCard: {

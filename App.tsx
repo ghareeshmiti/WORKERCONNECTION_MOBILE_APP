@@ -18,8 +18,18 @@ import EstablishmentLoginScreen from './src/screens/EstablishmentLoginScreen';
 import DepartmentLoginScreen from './src/screens/DepartmentLoginScreen';
 import WorkerRegistrationScreen from './src/screens/WorkerRegistrationScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
+import EstablishmentDashboard from './src/screens/EstablishmentDashboard';
+import DepartmentDashboard from './src/screens/DepartmentDashboard';
 
 const Stack = createNativeStackNavigator();
+
+function getDashboardComponent(role: string) {
+  switch (role) {
+    case 'ESTABLISHMENT_ADMIN': return EstablishmentDashboard;
+    case 'DEPARTMENT_ADMIN': return DepartmentDashboard;
+    default: return DashboardScreen;
+  }
+}
 
 function AppContent() {
   const { userContext, loading } = useAuth();
@@ -36,7 +46,10 @@ function AppContent() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {userContext ? (
-          <Stack.Screen name="Dashboard" component={DashboardScreen} />
+          <Stack.Screen
+            name="Dashboard"
+            component={getDashboardComponent(userContext.role)}
+          />
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />

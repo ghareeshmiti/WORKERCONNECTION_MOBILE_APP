@@ -12,28 +12,10 @@ class MainActivity : ReactActivity() {
   override fun createReactActivityDelegate(): ReactActivityDelegate =
       DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
 
-  override fun onResume() {
-    super.onResume()
-    try {
-      val host = (application as? MainApplication)?.reactHost
-      val reactContext = host?.currentReactContext
-      if (reactContext != null) {
-        NfcReaderHelper.setContext(reactContext)
-      }
-      NfcReaderHelper.enable(this)
-    } catch (e: Exception) {
-      android.util.Log.w("MainActivity", "NFC init skipped: ${e.message}")
-    }
-  }
-
-  override fun onPause() {
-    try {
-      NfcReaderHelper.disable(this)
-    } catch (e: Exception) {
-      android.util.Log.w("MainActivity", "NFC disable error: ${e.message}")
-    }
-    super.onPause()
-  }
+  // NOTE: NfcReaderHelper (enableReaderMode) is DISABLED to avoid blocking
+  // Android's Credential Manager / FIDO2 API from accessing NFC.
+  // FIDO2 smart card authentication is handled by react-native-passkey
+  // which uses Android's native FIDO2/Credential Manager stack.
 }
 
  

@@ -14,6 +14,7 @@ import {
     NativeModules,
 } from 'react-native';
 import { useAuth } from '../lib/AuthContext';
+import { SmartCardLogin } from '../components/SmartCardLogin';
 
 
 export default function LoginScreen({ navigation }: any) {
@@ -21,7 +22,6 @@ export default function LoginScreen({ navigation }: any) {
     const [otp, setOtp] = useState('');
     const [step, setStep] = useState<'aadhaar' | 'otp'>('aadhaar');
     const [loading, setLoading] = useState(false);
-    const [nfcWaiting, setNfcWaiting] = useState(false);
     const { setSession } = useAuth();
     const BASE_URL = 'https://workerconnection-backend.vercel.app';
 
@@ -87,61 +87,10 @@ export default function LoginScreen({ navigation }: any) {
         }
     };
 
-    const handleNfcLogin = () => {
-        setNfcWaiting(true);
-    };
-
-    // NFC Event Listener
-    React.useEffect(() => {
-        const { DeviceEventEmitter } = require('react-native');
-
-        const nfcListener = DeviceEventEmitter.addListener('onNfcTagDetected', async (event: any) => {
-            console.log('NFC Tag Detected:', event);
-            setNfcWaiting(false);
-            setLoading(true);
-
-            const cardId = event.uidHex || event.tagId || '';
-            const apduHex = event.apduHex || '';
-
-            try {
-                const res = await fetch(`${BASE_URL}/api/auth/nfc-login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cardId, uidHex: cardId, apduHex }),
-                });
-
-                const data = await res.json();
-
-                if (!res.ok) {
-                    throw new Error(data.error || 'NFC login failed');
-                }
-
-                console.log('NFC Login Successful, setting session...');
-                await setSession(data.session);
-            } catch (error: any) {
-                console.error('NFC Login Error:', error);
-                Alert.alert(
-                    'Smart Card Detected',
-                    `Card UID: ${cardId}\nAPDU: ${apduHex}\n\n${error.message}`,
-                    [
-                        { text: 'OK', style: 'cancel' },
-                    ]
-                );
-            } finally {
-                setLoading(false);
-            }
-        });
-
-        const nfcErrorListener = DeviceEventEmitter.addListener('onNfcTagError', (event: any) => {
-            console.log('NFC Error:', event);
-            setNfcWaiting(false);
-        });
-
-        return () => {
-            nfcListener.remove();
-            nfcErrorListener.remove();
-        };
-    }, []);
+    // REMOVED: Legacy NFC Listener and State to prevent interference with FIDO2
+    // const [nfcWaiting, setNfcWaiting] = useState(false); -> Removed
+    // const handleNfcLogin ... -> Removed
+    // useEffect ... DeviceEventEmitter ... -> Removed
 
     return (
         <KeyboardAvoidingView
@@ -239,21 +188,8 @@ export default function LoginScreen({ navigation }: any) {
                     <View style={styles.dividerLine} />
                 </View>
 
-                {/* NFC Login Button */}
-                <TouchableOpacity
-                    style={[styles.nfcButton, (loading || nfcWaiting) && styles.buttonDisabled]}
-                    onPress={handleNfcLogin}
-                    disabled={loading || nfcWaiting}
-                >
-                    {nfcWaiting ? (
-                        <ActivityIndicator color="#ea580c" />
-                    ) : (
-                        <>
-                            <Text style={styles.nfcIcon}>💳</Text>
-                            <Text style={styles.nfcButtonText}>Login with NFC Smart Card</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
+                {/* FIDO Smart Card Login Button */}
+                <SmartCardLogin onLoadingChange={setLoading} />
 
                 {/* Footer */}
                 <View style={styles.footer}>
@@ -262,30 +198,6 @@ export default function LoginScreen({ navigation }: any) {
                     </Text>
                 </View>
             </ScrollView>
-
-            {/* NFC Tap Modal - auto-closes on tag detect */}
-            <Modal
-                visible={nfcWaiting}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setNfcWaiting(false)}
-            >
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Tap Your Smart Card</Text>
-                        <Text style={styles.modalMessage}>
-                            Hold your FIDO Smart Card near the back of your phone to login.
-                        </Text>
-                        <ActivityIndicator size="large" color="#ea580c" style={{ marginVertical: 16 }} />
-                        <TouchableOpacity
-                            style={styles.modalCancelButton}
-                            onPress={() => setNfcWaiting(false)}
-                        >
-                            <Text style={styles.modalCancelText}>CANCEL</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </Modal>
         </KeyboardAvoidingView>
     );
 }

@@ -45,7 +45,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             let profileData: any = {};
 
             // Fetch Profile based on Role
-            if (role === 'WORKER') {
+            if (role === 'DEPARTMENT_ADMIN') {
+                const { data: deptData, error: deptError } = await supabase
+                    .from('departments')
+                    .select('*')
+                    .eq('id', userId)
+                    .maybeSingle();
+
+                if (deptError) {
+                    console.error('Error fetching department profile:', deptError);
+                }
+                if (deptData) {
+                    profileData = {
+                        department_id: deptData.id,
+                        full_name: deptData.name,
+                        district: deptData.district,
+                    };
+                }
+            } else if (role === 'ESTABLISHMENT_ADMIN') {
+                const { data: estData, error: estError } = await supabase
+                    .from('establishments')
+                    .select('id, name, establishment_type, construction_type')
+                    .eq('id', userId)
+                    .maybeSingle();
+
+                if (estError) {
+                    console.error('Error fetching establishment profile:', estError);
+                }
+                if (estData) {
+                    profileData = {
+                        establishment_id: estData.id,
+                        full_name: estData.name,
+                    };
+                } else {
+                    profileData = {
+                        establishment_id: userId,
+                        full_name: user.email,
+                    };
+                }
+            } else if (role === 'WORKER') {
                 const meta = user.user_metadata || {};
                 profileData = {
                     worker_id: meta.worker_id,
@@ -76,8 +114,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 authUserId: userId,
                 role: role,
                 workerId: profileData?.worker_id || undefined,
+                establishmentId: profileData?.establishment_id || undefined,
+                departmentId: profileData?.department_id || undefined,
                 fullName: profileData?.full_name || undefined,
                 email: user.email || undefined,
+                district: profileData?.district || undefined,
             };
 
             return context;
