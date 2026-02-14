@@ -10,6 +10,8 @@ import {
     ScrollView,
     ActivityIndicator,
     Alert,
+    Modal,
+    NativeModules,
 } from 'react-native';
 import { useAuth } from '../lib/AuthContext';
 
@@ -19,6 +21,7 @@ export default function LoginScreen() {
     const [otp, setOtp] = useState('');
     const [step, setStep] = useState<'aadhaar' | 'otp'>('aadhaar');
     const [loading, setLoading] = useState(false);
+    const [nfcWaiting, setNfcWaiting] = useState(false);
     const { setSession } = useAuth();
     const BASE_URL = 'https://workerconnection-backend.vercel.app';
 
@@ -83,6 +86,62 @@ export default function LoginScreen() {
             setLoading(false);
         }
     };
+
+    const handleNfcLogin = () => {
+        setNfcWaiting(true);
+    };
+
+    // NFC Event Listener
+    React.useEffect(() => {
+        const { DeviceEventEmitter } = require('react-native');
+
+        const nfcListener = DeviceEventEmitter.addListener('onNfcTagDetected', async (event: any) => {
+            console.log('NFC Tag Detected:', event);
+            setNfcWaiting(false);
+            setLoading(true);
+
+            const cardId = event.uidHex || event.tagId || '';
+            const apduHex = event.apduHex || '';
+
+            try {
+                const res = await fetch(`${BASE_URL}/api/auth/nfc-login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cardId, uidHex: cardId, apduHex }),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.error || 'NFC login failed');
+                }
+
+                console.log('NFC Login Successful, setting session...');
+                await setSession(data.session);
+            } catch (error: any) {
+                console.error('NFC Login Error:', error);
+                Alert.alert(
+                    'Smart Card Detected',
+                    `Card UID: ${cardId}\nAPDU: ${apduHex}\n\n${error.message}`,
+                    [
+                        { text: 'OK', style: 'cancel' },
+                    ]
+                );
+            } finally {
+                setLoading(false);
+            }
+        });
+
+        const nfcErrorListener = DeviceEventEmitter.addListener('onNfcTagError', (event: any) => {
+            console.log('NFC Error:', event);
+            setNfcWaiting(false);
+        });
+
+        return () => {
+            nfcListener.remove();
+            nfcErrorListener.remove();
+        };
+    }, []);
 
     return (
         <KeyboardAvoidingView
@@ -166,6 +225,29 @@ export default function LoginScreen() {
                     )}
                 </View>
 
+                {/* NFC Divider */}
+                <View style={styles.dividerContainer}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.dividerLine} />
+                </View>
+
+                {/* NFC Login Button */}
+                <TouchableOpacity
+                    style={[styles.nfcButton, (loading || nfcWaiting) && styles.buttonDisabled]}
+                    onPress={handleNfcLogin}
+                    disabled={loading || nfcWaiting}
+                >
+                    {nfcWaiting ? (
+                        <ActivityIndicator color="#ea580c" />
+                    ) : (
+                        <>
+                            <Text style={styles.nfcIcon}>💳</Text>
+                            <Text style={styles.nfcButtonText}>Login with NFC Smart Card</Text>
+                        </>
+                    )}
+                </TouchableOpacity>
+
                 {/* Footer */}
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
@@ -173,6 +255,30 @@ export default function LoginScreen() {
                     </Text>
                 </View>
             </ScrollView>
+
+            {/* NFC Tap Modal - auto-closes on tag detect */}
+            <Modal
+                visible={nfcWaiting}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setNfcWaiting(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Tap Your Smart Card</Text>
+                        <Text style={styles.modalMessage}>
+                            Hold your FIDO Smart Card near the back of your phone to login.
+                        </Text>
+                        <ActivityIndicator size="large" color="#ea580c" style={{ marginVertical: 16 }} />
+                        <TouchableOpacity
+                            style={styles.modalCancelButton}
+                            onPress={() => setNfcWaiting(false)}
+                        >
+                            <Text style={styles.modalCancelText}>CANCEL</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </KeyboardAvoidingView>
     );
 }
@@ -270,6 +376,42 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '500',
     },
+    dividerContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 24,
+        marginBottom: 16,
+    },
+    dividerLine: {
+        flex: 1,
+        height: 1,
+        backgroundColor: '#e2e8f0',
+    },
+    dividerText: {
+        marginHorizontal: 12,
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#94a3b8',
+    },
+    nfcButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#fff',
+        borderWidth: 2,
+        borderColor: '#ea580c',
+        borderRadius: 8,
+        padding: 16,
+    },
+    nfcIcon: {
+        fontSize: 20,
+        marginRight: 8,
+    },
+    nfcButtonText: {
+        color: '#ea580c',
+        fontSize: 16,
+        fontWeight: '600',
+    },
     footer: {
         marginTop: 32,
         alignItems: 'center',
@@ -277,5 +419,38 @@ const styles = StyleSheet.create({
     footerText: {
         fontSize: 12,
         color: '#94a3b8',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    modalContent: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: 24,
+        width: '80%',
+        alignItems: 'center',
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1e293b',
+        marginBottom: 8,
+    },
+    modalMessage: {
+        fontSize: 14,
+        color: '#64748b',
+        textAlign: 'center',
+    },
+    modalCancelButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 24,
+    },
+    modalCancelText: {
+        color: '#ea580c',
+        fontSize: 14,
+        fontWeight: '600',
     },
 });

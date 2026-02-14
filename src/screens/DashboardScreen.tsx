@@ -307,7 +307,7 @@ export default function DashboardScreen() {
                 <Text style={styles.headerSubtitle}>Welcome to your dashboard</Text>
             </View>
             <TouchableOpacity onPress={() => setActiveTab('profile')} style={styles.headerProfileButton}>
-                {profile?.photo_url ? (
+                {profile?.photo_url && typeof profile.photo_url === 'string' && profile.photo_url.trim() !== '' ? (
                     <Image source={{ uri: profile.photo_url }} style={styles.headerProfilePhoto} />
                 ) : (
                     <View style={styles.headerProfilePlaceholder}>
@@ -981,7 +981,7 @@ export default function DashboardScreen() {
 
                     <View style={styles.profileCardContent}>
                         <View style={styles.profileHeaderRow}>
-                            {profile?.photo_url ? (
+                            {profile?.photo_url && typeof profile.photo_url === 'string' && profile.photo_url.trim() !== '' ? (
                                 <Image source={{ uri: profile.photo_url }} style={styles.profilePhotoLarge} />
                             ) : (
                                 <View style={styles.profilePhotoPlaceholderLarge}>
@@ -2878,4 +2878,3 @@ const TabIcon = ({ name, active, label }: { name: string; active: boolean; label
         <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
     </View>
 );
-// Force Rebuild comment for Metro bundler
