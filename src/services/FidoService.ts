@@ -1,23 +1,13 @@
-import { Platform } from 'react-native';
-import { Passkey } from 'react-native-passkey';
-import { Buffer } from 'buffer';
+import { NativeModules } from 'react-native';
 
-const BASE_URL = 'https://workerconnection-backend.vercel.app'; // Or load from env
+const { Fido2Nfc } = NativeModules;
+
+const BASE_URL = 'https://workerconnection-backend.vercel.app';
 const API_URL = `${BASE_URL.replace(/\/$/, '')}/api`;
-
-const base64UrlToBase64 = (input: string) => {
-    // Replace non-url compatible chars
-    let output = input.replace(/-/g, '+').replace(/_/g, '/');
-    // Pad with =
-    while (output.length % 4) {
-        output += '=';
-    }
-    return output;
-};
 
 const handleResponse = async (res: Response) => {
     const text = await res.text();
-    console.log(`FidoService Response [${res.status}]:`, text); // Debug log
+    console.log(`FidoService Response [${res.status}]:`, text);
 
     try {
         const data = JSON.parse(text);
@@ -26,7 +16,6 @@ const handleResponse = async (res: Response) => {
         }
         return data;
     } catch (e) {
-        // If JSON parse fails, it's likely HTML (the "<" error)
         if (!res.ok) {
             throw new Error(`Server Error (${res.status}): ${text.substring(0, 100)}...`);
         }
@@ -36,51 +25,30 @@ const handleResponse = async (res: Response) => {
 
 export const authenticateUser = async (username: string, action: string | null = null, location: string = 'Unknown') => {
     try {
-        // 1. Begin Login
+        // 1. Begin Login - get challenge and credential IDs from server
         console.log('FidoService: Calling loginBegin...');
         const serverOptions = await loginBegin(username);
-        console.log('FidoService: loginBegin success. Options:', JSON.stringify(serverOptions));
+        console.log('FidoService: loginBegin success.');
 
         let fidoOptions = serverOptions;
-
-        // Handle unwrapping if server returns { publicKey: ... }
         if (serverOptions.publicKey) {
-            console.log('FidoService: Unwrapping publicKey from options...');
             fidoOptions = serverOptions.publicKey;
         }
 
-        // RELAX UV: Try 'preferred' instead of 'required' to see if strictness is the issue
-        fidoOptions.userVerification = 'preferred';
-
-        // LOG CREDENTIALS
-        if (fidoOptions.allowCredentials && Array.isArray(fidoOptions.allowCredentials)) {
+        if (fidoOptions.allowCredentials?.length) {
             console.log(`FidoService: allowCredentials has ${fidoOptions.allowCredentials.length} entries.`);
-            fidoOptions.allowCredentials.forEach((c: any, i: number) => {
-                console.log(`  Cred ${i} ID:`, c.id);
-            });
-
-            // STRIP TRANSPORTS: Allow any (NFC/USB/BLE)
-            fidoOptions.allowCredentials = fidoOptions.allowCredentials.map((cred: any) => {
-                const { transports, ...rest } = cred;
-                return {
-                    ...rest,
-                    // id: cred.id  <-- Keep original ID (Server format)
-                };
-            });
-        } else {
-            console.warn('FidoService: allowCredentials is MISSING or empty!');
         }
 
-        // 2. Authenticate with Passkey (Native Android FIDO Client)
-        console.log('FidoService: Calling Passkey.get...');
-        // We pass the unwrapped options (containing challenge, rpId, etc.)
-        const authResp = await Passkey.get(fidoOptions);
-        console.log('FidoService: Passkey.get success. Response:', JSON.stringify(authResp));
+        // 2. Authenticate using Google Play Services FIDO2 API (supports NFC security keys)
+        console.log('FidoService: Calling Fido2Nfc.authenticate...');
+        const authRespStr = await Fido2Nfc.authenticate(JSON.stringify(fidoOptions));
+        const authResp = JSON.parse(authRespStr);
+        console.log('FidoService: FIDO2 authentication success. ID:', authResp.id);
 
-        // 3. Finish Login
+        // 3. Finish Login - send assertion to server for verification
         console.log('FidoService: Calling loginFinish...');
         const result = await loginFinish(username, authResp, action, location);
-        console.log('FidoService: loginFinish success.', result);
+        console.log('FidoService: loginFinish success.');
         return result;
     } catch (e) {
         console.error('FidoService Error:', e);
@@ -88,8 +56,28 @@ export const authenticateUser = async (username: string, action: string | null =
     }
 };
 
+export const authenticateUserWithPin = async (username: string, pin: string, action: string | null = null, location: string = 'Unknown') => {
+    try {
+        console.log('FidoService: Starting PIN-based auth...');
+        const serverOptions = await loginBegin(username);
+        let fidoOptions = serverOptions;
+        if (serverOptions.publicKey) {
+            fidoOptions = serverOptions.publicKey;
+        }
+        console.log('FidoService: Calling Fido2Nfc.authenticateWithPin...');
+        const authRespStr = await Fido2Nfc.authenticateWithPin(JSON.stringify(fidoOptions), pin);
+        const authResp = JSON.parse(authRespStr);
+        console.log('FidoService: PIN auth success.');
+        const result = await loginFinish(username, authResp, action, location);
+        console.log('FidoService: PIN loginFinish success.');
+        return result;
+    } catch (e) {
+        console.error('FidoService PIN Error:', e);
+        throw e;
+    }
+};
+
 export const loginBegin = async (username: string = '') => {
-    // FIXED: Removed /auth prefix to match web client
     const res = await fetch(`${API_URL}/login/begin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -99,7 +87,6 @@ export const loginBegin = async (username: string = '') => {
 };
 
 export const loginFinish = async (username: string, body: any, action: string | null, location: string) => {
-    // FIXED: Removed /auth prefix to match web client
     const res = await fetch(`${API_URL}/login/finish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
