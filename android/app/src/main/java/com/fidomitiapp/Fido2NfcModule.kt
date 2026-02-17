@@ -24,10 +24,12 @@ import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
 import org.json.JSONObject
 
@@ -51,8 +53,28 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
     private var storedAllowList: List<ByteArray>? = null
     private var nfcAdapter: NfcAdapter? = null
     private var pendingPin: String? = null
+    private var tagRetryCount = 0
+    private val MAX_TAG_RETRIES = 3
 
     override fun getName(): String = "Fido2Nfc"
+
+    @ReactMethod
+    fun addListener(eventName: String) { /* Required for RN event emitter */ }
+
+    @ReactMethod
+    fun removeListeners(count: Int) { /* Required for RN event emitter */ }
+
+    private fun sendProgress(step: String) {
+        try {
+            val params = Arguments.createMap()
+            params.putString("step", step)
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("onFido2Progress", params)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send progress event: ${e.message}")
+        }
+    }
 
     @ReactMethod
     fun authenticate(requestJson: String, promise: Promise) {
@@ -188,6 +210,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         val allowList = storedAllowList ?: emptyList()
 
         Log.d(TAG, "NFC tag discovered: ${tag.techList.joinToString()}")
+        sendProgress("Card detected. Connecting...")
 
         try {
             val isoDep = IsoDep.get(tag)
@@ -197,15 +220,37 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
 
             isoDep.connect()
             isoDep.timeout = 30000 // 30s for biometric
+            Thread.sleep(100) // Let NFC connection stabilize after connect
             Log.d(TAG, "IsoDep connected, maxTransceive=${isoDep.maxTransceiveLength}")
 
             // Step 1: SELECT FIDO2 applet
-            val selectResp = isoDep.transceive(buildSelectApdu(FIDO2_AID))
+            val selectApdu = buildSelectApdu(FIDO2_AID)
+            val selectResp: ByteArray
+            try {
+                selectResp = isoDep.transceive(selectApdu)
+            } catch (e: android.nfc.TagLostException) {
+                // Tag was stale (card was on phone before reader mode enabled).
+                // Don't reject - keep reader mode active so Android re-discovers the card.
+                try { isoDep.close() } catch (_: Exception) {}
+                tagRetryCount++
+                if (tagRetryCount <= MAX_TAG_RETRIES) {
+                    Log.w(TAG, "SELECT failed (stale tag), waiting for re-discovery (attempt $tagRetryCount/$MAX_TAG_RETRIES)")
+                    sendProgress("Card connection lost.\nRemove card briefly, then tap again.")
+                    return // Reader mode stays active for next onTagDiscovered
+                } else {
+                    Log.e(TAG, "SELECT failed after $MAX_TAG_RETRIES retries")
+                    tagRetryCount = 0
+                    rejectAndCleanup(promise, "TagLost", "TagLost: Keep card steady. Remove and re-tap card.")
+                    return
+                }
+            }
+            tagRetryCount = 0 // Reset on success
             if (!isSwSuccess(selectResp)) {
                 rejectAndCleanup(promise, "NotFido2", "FIDO2 applet not found on card")
                 isoDep.close(); return
             }
             Log.d(TAG, "FIDO2 applet selected OK")
+            sendProgress("Setting up secure channel...")
 
             // Step 2: Get authenticator's ECDH public key (getKeyAgreement)
             val keyAgreeCmd = buildClientPinCmd(subCommand = 0x02, protocol = 1)
@@ -240,6 +285,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
 
             if (pin != null) {
                 // PIN flow: getPinUvAuthTokenUsingPinWithPermissions (subCommand 0x09)
+                sendProgress("Verifying PIN...\nKeep card steady.")
                 Log.d(TAG, "Using PIN verification")
                 val pinHash = sha256(pin.toByteArray(Charsets.UTF_8)).copyOfRange(0, 16)
                 val pinHashEnc = aesEncrypt(sharedSecret, pinHash)
@@ -253,6 +299,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             } else {
                 // Biometric flow: getPinUvAuthTokenUsingUvWithPermissions (subCommand 0x06)
                 try {
+                    sendProgress("Verifying fingerprint...\nPlace finger on card sensor.\nKeep card steady.")
                     val uvCmd = buildGetUvTokenCmd(protocol = 1, platformX = platformX, platformY = platformY,
                         permissions = 0x02, rpId = rpId)
                     Log.d(TAG, "Requesting biometric verification - place finger on card sensor now")
@@ -261,18 +308,16 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
                     encryptedToken = uvMap[2] as? ByteArray
                         ?: throw Exception("No pinUvAuthToken in UV response")
                     Log.d(TAG, "Got encrypted pinUvAuthToken via biometric (${encryptedToken.size}B)")
-                } catch (e: Exception) {
-                    isoDep.close()
-                    val msg = e.message ?: ""
-                    if (msg.contains("UV invalid") || msg.contains("0x3E") ||
-                        msg.contains("UV blocked") || msg.contains("0x3B") ||
-                        msg.contains("action timeout") || msg.contains("0x2D") ||
-                        msg.contains("Unauthorized permission") || msg.contains("0x3F")) {
-                        rejectAndCleanup(promise, "BiometricFailed",
-                            "Fingerprint not matched. Please try with PIN.")
-                        return
-                    }
+                } catch (e: android.nfc.TagLostException) {
+                    // Physical NFC connection lost - re-throw for outer TagLost handler
                     throw e
+                } catch (e: Exception) {
+                    try { isoDep.close() } catch (_: Exception) {}
+                    Log.e(TAG, "Biometric verification failed: ${e.message}")
+                    // Any non-TagLost error during biometric → treat as biometric failed
+                    rejectAndCleanup(promise, "BiometricFailed",
+                        "Fingerprint not matched. ${e.message ?: "Please try with PIN."}")
+                    return
                 }
             }
 
@@ -284,6 +329,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             val pinUvAuthParam = hmacSha256First16(pinUvAuthToken, cdHash)
 
             // Step 8: Send authenticatorGetAssertion with pinUvAuth
+            sendProgress("Authenticating...\nKeep card steady.")
             val assertionCmd = buildGetAssertionCommand(rpId, cdHash, allowList, pinUvAuthParam, 1)
             Log.d(TAG, "Sending authenticatorGetAssertion with pinUvAuth")
             val assertionResp = sendCtap2(isoDep, assertionCmd)
@@ -572,6 +618,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         storedClientDataHash = null
         storedClientDataJSON = null
         storedAllowList = null
+        tagRetryCount = 0
     }
 
     private fun rejectAndCleanup(promise: Promise, code: String, message: String) {

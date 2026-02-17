@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     TouchableOpacity,
     Text,
@@ -9,6 +9,7 @@ import {
     View,
     NativeModules,
     TextInput,
+    DeviceEventEmitter,
 } from 'react-native';
 import { authenticateUser, authenticateUserWithPin } from '../services/FidoService';
 import { useAuth } from '../lib/AuthContext';
@@ -22,12 +23,23 @@ interface SmartCardLoginProps {
 export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange }) => {
     const [loading, setLoading] = useState(false);
     const [showNfcModal, setShowNfcModal] = useState(false);
+    const [showChoiceModal, setShowChoiceModal] = useState(false);
     const [showPinModal, setShowPinModal] = useState(false);
     const [pin, setPin] = useState('');
     const [pinError, setPinError] = useState('');
     const [pinLoading, setPinLoading] = useState(false);
     const [nfcMessage, setNfcMessage] = useState('');
     const { setSession } = useAuth();
+
+    // Listen for NFC progress events from Kotlin
+    useEffect(() => {
+        const sub = DeviceEventEmitter.addListener('onFido2Progress', (event) => {
+            if (event?.step) {
+                setNfcMessage(event.step);
+            }
+        });
+        return () => sub.remove();
+    }, []);
 
     const handleLogin = async () => {
         setLoading(true);
@@ -55,8 +67,8 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
 
             if (code === 'BiometricFailed' || msg.includes('Fingerprint not matched')) {
                 setPin('');
-                setPinError('Fingerprint not matched. Please enter your card PIN.');
-                setShowPinModal(true);
+                setPinError('');
+                setShowChoiceModal(true);
             } else if (msg.includes('UserCancelled') || msg.includes('cancelled')) {
                 // User cancelled
             } else if (msg.includes('TagLost')) {
@@ -120,6 +132,18 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         }
     };
 
+    const handleRetryFingerprint = () => {
+        setShowChoiceModal(false);
+        handleLogin();
+    };
+
+    const handleChoosePin = () => {
+        setShowChoiceModal(false);
+        setPin('');
+        setPinError('Fingerprint not matched. Please enter your card PIN.');
+        setShowPinModal(true);
+    };
+
     const handleCancel = async () => {
         try {
             await Fido2Nfc.cancel();
@@ -127,6 +151,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             // ignore cancel errors
         }
         setShowNfcModal(false);
+        setShowChoiceModal(false);
         setShowPinModal(false);
         setLoading(false);
         setPinLoading(false);
@@ -164,6 +189,39 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
                         <Text style={styles.modalTitle}>Ready to Scan</Text>
                         <Text style={styles.modalText}>{nfcMessage}</Text>
                         <ActivityIndicator size="large" color="#ea580c" style={styles.spinner} />
+                        <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
+                            <Text style={styles.cancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Biometric Failed - Choice Modal */}
+            <Modal
+                visible={showChoiceModal}
+                transparent
+                animationType="slide"
+                onRequestClose={handleCancel}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.pinModalContent}>
+                        <Text style={styles.pinIcon}>&#x26A0;&#xFE0F;</Text>
+                        <Text style={styles.modalTitle}>Fingerprint Not Matched</Text>
+                        <Text style={styles.choiceText}>
+                            Fingerprint verification failed. Please choose how to proceed:
+                        </Text>
+                        <TouchableOpacity
+                            style={styles.choiceButton}
+                            onPress={handleRetryFingerprint}
+                        >
+                            <Text style={styles.choiceButtonText}>Retry Fingerprint</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.pinButton}
+                            onPress={handleChoosePin}
+                        >
+                            <Text style={styles.pinButtonText}>Enter Card PIN</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
                             <Text style={styles.cancelText}>Cancel</Text>
                         </TouchableOpacity>
@@ -324,6 +382,29 @@ const styles = StyleSheet.create({
     },
     pinButtonText: {
         color: '#fff',
+        fontSize: 16,
+        fontWeight: '600' as const,
+    },
+    choiceText: {
+        fontSize: 15,
+        color: '#666',
+        textAlign: 'center' as const,
+        lineHeight: 22,
+        marginBottom: 24,
+    },
+    choiceButton: {
+        backgroundColor: '#fff',
+        borderWidth: 2,
+        borderColor: '#ea580c',
+        borderRadius: 8,
+        paddingVertical: 14,
+        paddingHorizontal: 32,
+        width: '100%' as const,
+        alignItems: 'center' as const,
+        marginBottom: 12,
+    },
+    choiceButtonText: {
+        color: '#ea580c',
         fontSize: 16,
         fontWeight: '600' as const,
     },
