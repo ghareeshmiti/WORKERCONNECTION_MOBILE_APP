@@ -70,6 +70,26 @@ export const AttendanceCheckIn: React.FC<AttendanceCheckInProps> = ({
                 Alert.alert('Authentication Failed', 'Could not verify smart card.');
             }
         } catch (error: any) {
+            // Attempt fallback if UID is available from the FIDO2 error
+            if (error.userInfo?.uid) {
+                try {
+                    console.log('Attempting fallback UID check-in...', error.userInfo.uid);
+                    const { nfcLogin } = require('../services/FidoService');
+                    const res = await nfcLogin(error.userInfo.uid, 'toggle', establishmentName);
+                    if (res.verified) {
+                        setShowNfcModal(false);
+                        setResult({
+                            status: res.status,
+                            message: res.message,
+                            username: res.username,
+                        });
+                        onCheckComplete?.();
+                        return;
+                    }
+                } catch (fbError) {
+                    console.warn('Fallback check-in failed:', fbError);
+                }
+            }
             setShowNfcModal(false);
             console.error('Attendance Check Error:', error);
             const msg = error.message || 'Smart card authentication failed.';
@@ -120,6 +140,26 @@ export const AttendanceCheckIn: React.FC<AttendanceCheckInProps> = ({
                 Alert.alert('Authentication Failed', 'Could not verify with PIN.');
             }
         } catch (error: any) {
+            // Attempt fallback if UID is available from the FIDO2 error
+            if (error.userInfo?.uid) {
+                try {
+                    console.log('Attempting fallback UID check-in (PIN)...', error.userInfo.uid);
+                    const { nfcLogin } = require('../services/FidoService');
+                    const res = await nfcLogin(error.userInfo.uid, 'toggle', establishmentName);
+                    if (res.verified) {
+                        setShowNfcModal(false);
+                        setResult({
+                            status: res.status,
+                            message: res.message,
+                            username: res.username,
+                        });
+                        onCheckComplete?.();
+                        return;
+                    }
+                } catch (fbError) {
+                    console.warn('Fallback check-in failed:', fbError);
+                }
+            }
             setShowNfcModal(false);
             const msg = error.message || 'PIN verification failed.';
 
@@ -134,6 +174,10 @@ export const AttendanceCheckIn: React.FC<AttendanceCheckInProps> = ({
                 setShowPinModal(true);
             } else if (msg.includes('UserCancelled')) {
                 // cancelled
+            } else if (msg.includes('UV required') || msg.includes('UV blocked') || msg.includes('UV invalid') || msg.includes('BiometricFailed')) {
+                setPin('');
+                setPinError('PIN verification failed. Please try again.');
+                setShowPinModal(true);
             } else {
                 Alert.alert('Error', msg);
             }

@@ -110,7 +110,7 @@ export default function DepartmentLoginScreen({ navigation }: any) {
                 {/* Footer */}
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
-                        Secure login powered by FIDO2
+                        Secure login powered by Miti.US
                     </Text>
                 </View>
             </ScrollView>
@@ -202,6 +202,7 @@ const styles = StyleSheet.create({
         flex: 1,
         padding: 14,
         fontSize: 15,
+        color: '#ea580c',
     },
     eyeButton: {
         paddingHorizontal: 14,

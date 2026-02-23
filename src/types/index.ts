@@ -1,4 +1,4 @@
-export type AppRole = 'WORKER' | 'DEPARTMENT_ADMIN' | 'ESTABLISHMENT_ADMIN';
+export type AppRole = 'WORKER' | 'DEPARTMENT_ADMIN' | 'ESTABLISHMENT_ADMIN' | 'EMPLOYEE';
 
 export interface UserContext {
     authUserId: string;

@@ -29,6 +29,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
 import org.json.JSONObject
@@ -209,6 +210,10 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         val rpId = storedRpId ?: return
         val allowList = storedAllowList ?: emptyList()
 
+        // Capture UID for fallback
+        val uidBytes = tag.id
+        val uidHex = if (uidBytes != null) bytesToHex(uidBytes) else null
+
         Log.d(TAG, "NFC tag discovered: ${tag.techList.joinToString()}")
         sendProgress("Card detected. Connecting...")
 
@@ -280,22 +285,39 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             // Step 5: Get pinUvAuthToken (biometric or PIN)
             val platformX = bigIntTo32Bytes(platformPubKey.w.affineX)
             val platformY = bigIntTo32Bytes(platformPubKey.w.affineY)
-            val encryptedToken: ByteArray
+            var encryptedToken: ByteArray
             val pin = pendingPin
 
             if (pin != null) {
-                // PIN flow: getPinUvAuthTokenUsingPinWithPermissions (subCommand 0x09)
+                // PIN flow: try CTAP2.1 subCommand 0x09 first, fallback to legacy 0x05
                 sendProgress("Verifying PIN...\nKeep card steady.")
                 Log.d(TAG, "Using PIN verification")
                 val pinHash = sha256(pin.toByteArray(Charsets.UTF_8)).copyOfRange(0, 16)
                 val pinHashEnc = aesEncrypt(sharedSecret, pinHash)
-                val pinCmd = buildGetPinTokenCmd(protocol = 1, platformX = platformX, platformY = platformY,
-                    pinHashEnc = pinHashEnc)
-                val pinResp = sendCtap2(isoDep, pinCmd)
-                val pinMap = CborDecoder(pinResp).decodeMap()
-                encryptedToken = pinMap[2] as? ByteArray
-                    ?: throw Exception("No pinUvAuthToken in PIN response")
-                Log.d(TAG, "Got encrypted pinUvAuthToken via PIN (${encryptedToken.size}B)")
+
+                try {
+                    // Try CTAP2.1: getPinUvAuthTokenUsingPinWithPermissions (0x09)
+                    Log.d(TAG, "Trying CTAP2.1 getPinToken (subCommand 0x09)")
+                    val pinCmd = buildGetPinTokenCmd(protocol = 1, platformX = platformX, platformY = platformY,
+                        pinHashEnc = pinHashEnc, permissions = 0x02, rpId = rpId)
+                    val pinResp = sendCtap2(isoDep, pinCmd)
+                    val pinMap = CborDecoder(pinResp).decodeMap()
+                    encryptedToken = pinMap[2] as? ByteArray
+                        ?: throw Exception("No pinUvAuthToken in PIN response")
+                    Log.d(TAG, "Got encrypted pinUvAuthToken via CTAP2.1 PIN (${encryptedToken.size}B)")
+                } catch (e: android.nfc.TagLostException) {
+                    throw e // Re-throw TagLost for outer handler
+                } catch (e: Exception) {
+                    // CTAP2.1 not supported — fallback to legacy getPinToken (0x05)
+                    Log.w(TAG, "CTAP2.1 getPinToken failed: ${e.message}, trying legacy 0x05")
+                    val legacyCmd = buildLegacyGetPinTokenCmd(protocol = 1, platformX = platformX, platformY = platformY,
+                        pinHashEnc = pinHashEnc)
+                    val pinResp = sendCtap2(isoDep, legacyCmd)
+                    val pinMap = CborDecoder(pinResp).decodeMap()
+                    encryptedToken = pinMap[2] as? ByteArray
+                        ?: throw Exception("No pinUvAuthToken in legacy PIN response")
+                    Log.d(TAG, "Got encrypted pinUvAuthToken via legacy PIN (${encryptedToken.size}B)")
+                }
             } else {
                 // Biometric flow: getPinUvAuthTokenUsingUvWithPermissions (subCommand 0x06)
                 try {
@@ -314,9 +336,11 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
                 } catch (e: Exception) {
                     try { isoDep.close() } catch (_: Exception) {}
                     Log.e(TAG, "Biometric verification failed: ${e.message}")
-                    // Any non-TagLost error during biometric → treat as biometric failed
+                    // Any non-TagLost error during biometric -> treat as biometric failed
+                    val userInfo = Arguments.createMap()
+                    if (uidHex != null) userInfo.putString("uid", uidHex)
                     rejectAndCleanup(promise, "BiometricFailed",
-                        "Fingerprint not matched. ${e.message ?: "Please try with PIN."}")
+                        "Fingerprint not matched. ${e.message ?: "Please try with PIN."}", userInfo)
                     return
                 }
             }
@@ -373,7 +397,21 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             rejectAndCleanup(promise, "TagLost", "TagLost: Keep card steady against phone and finger on sensor.")
         } catch (e: Exception) {
             Log.e(TAG, "NFC CTAP2 error", e)
-            rejectAndCleanup(promise, "NfcError", e.message ?: "NFC error")
+            val msg = e.message ?: "NFC error"
+            // UV-related CTAP2 errors (0x2E, 0x3B, 0x3E) should trigger PIN fallback
+            val isUvError = msg.contains("UV required") || msg.contains("UV blocked") ||
+                msg.contains("UV invalid") || msg.contains("Not allowed (UV") || 
+                msg.contains("Operation denied (Unauth)") || msg.contains("Unauthorized permission")
+            if (isUvError) {
+                Log.w(TAG, "UV error detected in outer catch - treating as BiometricFailed for PIN fallback")
+                val userInfo = Arguments.createMap()
+                if (uidHex != null) userInfo.putString("uid", uidHex)
+                rejectAndCleanup(promise, "BiometricFailed", "Fingerprint not matched. $msg Please try with PIN.", userInfo)
+            } else {
+                val userInfo = Arguments.createMap()
+                if (uidHex != null) userInfo.putString("uid", uidHex)
+                rejectAndCleanup(promise, "NfcError", msg, userInfo)
+            }
         }
     }
 
@@ -412,6 +450,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
 
         val status = fullData[0].toInt() and 0xFF
         if (status != 0x00) {
+            if (status == 0x27) throw Exception("Operation denied (Unauth)")
             throw Exception(ctap2ErrorMessage(status))
         }
         return fullData.copyOfRange(1, fullData.size)
@@ -462,9 +501,43 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         return out.toByteArray()
     }
 
-    /** authenticatorClientPIN - getPinToken (subCommand 0x05) */
+    /** authenticatorClientPIN - getPinUvAuthTokenUsingPinWithPermissions (subCommand 0x09) */
     private fun buildGetPinTokenCmd(protocol: Int, platformX: ByteArray, platformY: ByteArray,
-                                     pinHashEnc: ByteArray): ByteArray {
+                                     pinHashEnc: ByteArray, permissions: Int = 0x02, rpId: String? = null): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(0x06) // authenticatorClientPIN
+
+        var mapSize = 5 // protocol + subCommand + keyAgreement + pinHashEnc + permissions
+        if (rpId != null) mapSize++ // rpId
+
+        out.write(cborMapHeader(mapSize))
+
+        // Key 0x01: pinUvAuthProtocol
+        out.write(cborUint(1)); out.write(cborUint(protocol))
+
+        // Key 0x02: subCommand = 0x09 (getPinUvAuthTokenUsingPinWithPermissions)
+        out.write(cborUint(2)); out.write(cborUint(9))
+
+        // Key 0x03: keyAgreement (platform COSE_Key)
+        out.write(cborUint(3)); out.write(encodeCoseKey(platformX, platformY))
+
+        // Key 0x06: pinHashEnc
+        out.write(cborUint(6)); out.write(cborBytes(pinHashEnc))
+
+        // Key 0x09: permissions (0x02 = ga = get assertion)
+        out.write(cborUint(9)); out.write(cborUint(permissions))
+
+        // Key 0x0A: rpId
+        if (rpId != null) {
+            out.write(cborUint(10)); out.write(cborText(rpId))
+        }
+
+        return out.toByteArray()
+    }
+
+    /** Legacy authenticatorClientPIN - getPinToken (subCommand 0x05) for CTAP2.0 cards */
+    private fun buildLegacyGetPinTokenCmd(protocol: Int, platformX: ByteArray, platformY: ByteArray,
+                                           pinHashEnc: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(0x06) // authenticatorClientPIN
         out.write(cborMapHeader(4))
@@ -621,9 +694,13 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         tagRetryCount = 0
     }
 
-    private fun rejectAndCleanup(promise: Promise, code: String, message: String) {
+    private fun rejectAndCleanup(promise: Promise, code: String, message: String, userInfo: WritableMap? = null) {
         cleanup()
-        promise.reject(code, message)
+        if (userInfo != null) {
+            promise.reject(code, message, userInfo)
+        } else {
+            promise.reject(code, message)
+        }
     }
 
     // ==================== Android Origin ====================
@@ -777,4 +854,12 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
     private fun base64UrlEncode(d: ByteArray): String = Base64.encodeToString(d, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     private fun base64UrlDecode(s: String): ByteArray = Base64.decode(s, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     private fun concat(a: ByteArray, b: ByteArray): ByteArray { val r = ByteArray(a.size + b.size); System.arraycopy(a, 0, r, 0, a.size); System.arraycopy(b, 0, r, a.size, b.size); return r }
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val sb = StringBuilder()
+        for (b in bytes) {
+            sb.append(String.format("%02X", b))
+        }
+        return sb.toString()
+    }
 }

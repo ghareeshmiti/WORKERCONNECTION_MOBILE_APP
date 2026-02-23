@@ -10,6 +10,7 @@ interface AuthContextType {
     loading: boolean;
     signIn: (email: string, password: string) => Promise<{ data: any; error: Error | null }>;
     signInDemo: () => Promise<{ error: null }>;
+    signInHealthDemo: () => Promise<{ error: null }>;
     setSession: (session: Session) => void;
     signOut: () => Promise<void>;
     refreshUserContext: () => Promise<void>;
@@ -29,16 +30,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             let rawRole = (user.user_metadata?.role || user.app_metadata?.role) as string;
             let role: AppRole | undefined;
 
-            // Normalize Role
+            // Normalize Role from metadata
             if (rawRole === 'department') role = 'DEPARTMENT_ADMIN';
             else if (rawRole === 'establishment') role = 'ESTABLISHMENT_ADMIN';
             else if (rawRole === 'worker') role = 'WORKER';
-            else if (rawRole === 'DEPARTMENT_ADMIN' || rawRole === 'ESTABLISHMENT_ADMIN' || rawRole === 'WORKER') {
+            else if (rawRole === 'employee' || rawRole === 'EMPLOYEE') role = 'EMPLOYEE';
+            else if (
+                rawRole === 'DEPARTMENT_ADMIN' ||
+                rawRole === 'ESTABLISHMENT_ADMIN' ||
+                rawRole === 'WORKER'
+            ) {
                 role = rawRole as AppRole;
             }
 
+            // If no role in metadata, try the user_roles table (same as web app)
             if (!role) {
-                console.warn('No role found for user');
+                try {
+                    const { data: roleRow } = await supabase
+                        .from('user_roles')
+                        .select('role')
+                        .eq('user_id', userId)
+                        .maybeSingle();
+                    if (roleRow?.role) {
+                        const dbRole = roleRow.role as string;
+                        if (dbRole === 'EMPLOYEE' || dbRole === 'employee') role = 'EMPLOYEE';
+                        else if (dbRole === 'DEPARTMENT_ADMIN' || dbRole === 'department') role = 'DEPARTMENT_ADMIN';
+                        else if (dbRole === 'ESTABLISHMENT_ADMIN' || dbRole === 'establishment') role = 'ESTABLISHMENT_ADMIN';
+                        else if (dbRole === 'WORKER' || dbRole === 'worker') role = 'WORKER';
+                        else role = dbRole as AppRole;
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch role from user_roles table', e);
+                }
+            }
+
+            if (!role) {
+                console.warn('No role found for user', userId);
                 return null;
             }
 
@@ -108,6 +135,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                         console.warn('Could not fetch worker profile', e);
                     }
                 }
+            } else if (role === 'EMPLOYEE') {
+                // Fetch conductor/employee profile — fault tolerant, never hangs
+                try {
+                    const { data: profileRow } = await supabase
+                        .from('profiles')
+                        .select('establishment_id, worker_id')
+                        .eq('auth_user_id', userId)
+                        .maybeSingle();
+                    profileData = {
+                        establishment_id: profileRow?.establishment_id || userId,
+                        full_name: user.user_metadata?.full_name || user.email || 'Employee',
+                    };
+                } catch (e) {
+                    console.warn('Could not fetch employee profile, using defaults', e);
+                    profileData = {
+                        establishment_id: userId,
+                        full_name: user.user_metadata?.full_name || user.email || 'Employee',
+                    };
+                }
             }
 
             const context: UserContext = {
@@ -143,8 +189,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setUser(session?.user ?? null);
 
                 if (session?.user) {
-                    const context = await fetchUserContext(session.user);
-                    setUserContext(context);
+                    // Wait for userContext before unblocking — prevents flash of wrong screen
+                    try {
+                        const context = await fetchUserContext(session.user);
+                        setUserContext(context);
+                    } catch (e) {
+                        console.warn('fetchUserContext failed in onAuthStateChange', e);
+                    }
                 } else {
                     setUserContext(null);
                 }
@@ -153,18 +204,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
 
         // Check for existing session
-        supabase.auth.getSession().then(({ data: { session } }) => {
+        supabase.auth.getSession().then(async ({ data: { session } }) => {
             setSession(session);
             setUser(session?.user ?? null);
 
             if (session?.user) {
-                fetchUserContext(session.user).then((context) => {
+                try {
+                    const context = await fetchUserContext(session.user);
                     setUserContext(context);
-                    setLoading(false);
-                });
-            } else {
-                setLoading(false);
+                } catch (e) {
+                    console.warn('fetchUserContext failed in getSession', e);
+                }
             }
+            setLoading(false);
         }).catch((err) => {
             console.warn('Session check failed', err);
             setLoading(false);
@@ -212,6 +264,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: null };
     };
 
+    const signInHealthDemo = async () => {
+        const demoUser: User = {
+            id: 'health-demo-123',
+            app_metadata: { provider: 'email' },
+            user_metadata: { role: 'EMPLOYEE', full_name: 'Health Employee' },
+            aud: 'authenticated',
+            created_at: new Date().toISOString(),
+            email: 'employ@aphealth.com'
+        } as any;
+
+        const demoSession: Session = {
+            access_token: 'health-demo-token',
+            refresh_token: 'health-demo-refresh',
+            expires_in: 3600,
+            token_type: 'bearer',
+            user: demoUser,
+        };
+
+        setSession(demoSession);
+        setUser(demoUser);
+
+        const context: UserContext = {
+            authUserId: demoUser.id,
+            role: 'EMPLOYEE',
+            fullName: 'Health Employee',
+            email: 'employ@aphealth.com',
+        };
+        setUserContext(context);
+        return { error: null };
+    };
+
     const setSessionManual = async (newSession: Session) => {
         const { error } = await supabase.auth.setSession(newSession);
         if (error) {
@@ -246,6 +329,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 loading,
                 signIn,
                 signInDemo,
+                signInHealthDemo,
                 setSession: setSessionManual,
                 signOut,
                 refreshUserContext,

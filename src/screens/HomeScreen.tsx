@@ -111,6 +111,30 @@ export default function HomeScreen({ navigation }: any) {
                         </View>
                     </View>
 
+                    {/* Employee / Conductor Access Card */}
+                    <View style={styles.roleCard}>
+                        <View style={styles.roleCardHeader}>
+                            <View style={styles.iconContainer}>
+                                <Text style={styles.roleIcon}>🚌</Text>
+                            </View>
+                            <View>
+                                <Text style={styles.roleCardTitle}>Employee Access</Text>
+                                <Text style={styles.roleCardSubtitle}>APSRTC Conductors & Staff</Text>
+                            </View>
+                            <View style={styles.arrowContainer}>
+                                <Text style={styles.arrowIcon}>›</Text>
+                            </View>
+                        </View>
+                        <View style={styles.roleButtonRow}>
+                            <TouchableOpacity
+                                style={styles.primaryButton}
+                                onPress={() => navigation.navigate('EmployeeLogin')}
+                            >
+                                <Text style={styles.primaryButtonText}>Login</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
                     {/* Establishment Access Card */}
                     <View style={styles.roleCard}>
                         <View style={styles.roleCardHeader}>
@@ -172,7 +196,7 @@ export default function HomeScreen({ navigation }: any) {
                         Government of Andhra Pradesh
                     </Text>
                     <Text style={styles.footerSubtext}>
-                        Secure login powered by FIDO2
+                        Secure login powered by Miti.US
                     </Text>
                 </View>
             </ScrollView>
