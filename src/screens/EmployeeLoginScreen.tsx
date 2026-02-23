@@ -12,13 +12,14 @@ import {
     Alert,
 } from 'react-native';
 import { useAuth } from '../lib/AuthContext';
+import { supabase } from '../lib/supabase';
 
-export default function EstablishmentLoginScreen({ navigation }: any) {
+export default function EmployeeLoginScreen({ navigation }: any) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
-    const { signIn } = useAuth();
+    const { signIn, signInHealthDemo } = useAuth();
 
     const handleSignIn = async () => {
         if (!email.trim() || !password.trim()) {
@@ -27,11 +28,25 @@ export default function EstablishmentLoginScreen({ navigation }: any) {
         }
 
         setLoading(true);
+
+        /* 
+        // NOTE: Demo bypass removed to allow real database access for Health module integration.
+        // User 'employ@aphealth.com' should be a valid Supabase user now.
+        if (email.trim() === 'employ@aphealth.com' && password === 'Test@1234') {
+             // ...
+        } 
+        */
+
         try {
-            const { error } = await signIn(email.trim(), password);
-            if (error) {
-                throw error;
-            }
+            // Sign in with supabase — AuthContext will handle routing via userContext
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email: email.trim(),
+                password,
+            });
+
+            if (error) throw error;
+            // Navigation is handled automatically by App.tsx based on userContext
+            // No manual navigation.replace needed
         } catch (error: any) {
             Alert.alert('Login Failed', error.message || 'Invalid email or password');
         } finally {
@@ -56,10 +71,10 @@ export default function EstablishmentLoginScreen({ navigation }: any) {
                 {/* Header */}
                 <View style={styles.header}>
                     <View style={styles.logoPlaceholder}>
-                        <Text style={styles.logoText}>🏢</Text>
+                        <Text style={styles.logoText}>🚌</Text>
                     </View>
-                    <Text style={styles.title}>Establishment Login</Text>
-                    <Text style={styles.subtitle}>Enter your credentials to access your dashboard</Text>
+                    <Text style={styles.title}>Employee Login</Text>
+                    <Text style={styles.subtitle}>APSRTC Conductor / Staff Portal</Text>
                 </View>
 
                 {/* Login Form */}
@@ -67,7 +82,7 @@ export default function EstablishmentLoginScreen({ navigation }: any) {
                     <Text style={styles.label}>Email</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder="you@example.com"
+                        placeholder="conductor@apsrtc.gov.in"
                         keyboardType="email-address"
                         autoCapitalize="none"
                         autoCorrect={false}
@@ -110,8 +125,9 @@ export default function EstablishmentLoginScreen({ navigation }: any) {
                 {/* Footer */}
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
-                        Secure login powered by Miti.US
+                        APSRTC – Government of Andhra Pradesh
                     </Text>
+                    <Text style={styles.footerSubtext}>Secure Employee Portal</Text>
                 </View>
             </ScrollView>
         </KeyboardAvoidingView>
@@ -142,19 +158,24 @@ const styles = StyleSheet.create({
         marginBottom: 32,
     },
     logoPlaceholder: {
-        width: 64,
-        height: 64,
-        borderRadius: 16,
+        width: 72,
+        height: 72,
+        borderRadius: 20,
         backgroundColor: '#ea580c',
         justifyContent: 'center',
         alignItems: 'center',
         marginBottom: 16,
+        elevation: 4,
+        shadowColor: '#ea580c',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
     },
     logoText: {
-        fontSize: 28,
+        fontSize: 36,
     },
     title: {
-        fontSize: 22,
+        fontSize: 24,
         fontWeight: 'bold',
         color: '#ea580c',
         marginBottom: 4,
@@ -163,6 +184,7 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: '#64748b',
         textAlign: 'center',
+        fontWeight: '500',
     },
     formContainer: {
         backgroundColor: '#fff',
@@ -213,9 +235,14 @@ const styles = StyleSheet.create({
     },
     button: {
         backgroundColor: '#ea580c',
-        borderRadius: 8,
+        borderRadius: 10,
         padding: 16,
         alignItems: 'center',
+        elevation: 2,
+        shadowColor: '#ea580c',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
     },
     buttonDisabled: {
         opacity: 0.6,
@@ -223,7 +250,7 @@ const styles = StyleSheet.create({
     buttonText: {
         color: '#fff',
         fontSize: 16,
-        fontWeight: '600',
+        fontWeight: '700',
     },
     footer: {
         marginTop: 32,
@@ -231,6 +258,12 @@ const styles = StyleSheet.create({
     },
     footerText: {
         fontSize: 12,
+        fontWeight: '600',
+        color: '#64748b',
+    },
+    footerSubtext: {
+        fontSize: 11,
         color: '#94a3b8',
+        marginTop: 4,
     },
 });

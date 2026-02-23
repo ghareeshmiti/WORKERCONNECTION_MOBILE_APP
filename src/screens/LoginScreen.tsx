@@ -194,7 +194,7 @@ export default function LoginScreen({ navigation }: any) {
                 {/* Footer */}
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
-                        Secure login powered by FIDO2
+                        Secure login powered by Miti.US
                     </Text>
                 </View>
             </ScrollView>

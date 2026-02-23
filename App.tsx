@@ -14,19 +14,26 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './src/lib/AuthContext';
 import HomeScreen from './src/screens/HomeScreen';
 import LoginScreen from './src/screens/LoginScreen';
+import EmployeeLoginScreen from './src/screens/EmployeeLoginScreen';
 import EstablishmentLoginScreen from './src/screens/EstablishmentLoginScreen';
 import DepartmentLoginScreen from './src/screens/DepartmentLoginScreen';
 import WorkerRegistrationScreen from './src/screens/WorkerRegistrationScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import EstablishmentDashboard from './src/screens/EstablishmentDashboard';
 import DepartmentDashboard from './src/screens/DepartmentDashboard';
+import ConductorDashboardScreen from './src/screens/ConductorDashboardScreen';
+import HealthDashboard from './src/screens/HealthDashboard';
+import HealthScanScreen from './src/screens/HealthScanScreen';
+import DoctorSelectionScreen from './src/screens/DoctorSelectionScreen';
 
 const Stack = createNativeStackNavigator();
 
-function getDashboardComponent(role: string) {
+function getDashboardComponent(role: string, email?: string) {
+  if (email === 'employ@aphealth.com') return HealthScanScreen;
   switch (role) {
     case 'ESTABLISHMENT_ADMIN': return EstablishmentDashboard;
     case 'DEPARTMENT_ADMIN': return DepartmentDashboard;
+    case 'EMPLOYEE': return ConductorDashboardScreen;
     default: return DashboardScreen;
   }
 }
@@ -46,14 +53,27 @@ function AppContent() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {userContext ? (
-          <Stack.Screen
-            name="Dashboard"
-            component={getDashboardComponent(userContext.role)}
-          />
+          // Authenticated: route by role
+          userContext.email === 'employ@aphealth.com' ? (
+            <>
+              <Stack.Screen name="HealthScan" component={HealthScanScreen} />
+              <Stack.Screen name="FamilySelection" component={require('./src/screens/FamilySelectionScreen').default} />
+              <Stack.Screen name="DoctorSelection" component={DoctorSelectionScreen} />
+              <Stack.Screen name="HealthDashboard" component={HealthDashboard} />
+            </>
+          ) : userContext.role === 'EMPLOYEE' ? (
+            <Stack.Screen name="ConductorDashboard" component={ConductorDashboardScreen} />
+          ) : (
+            <Stack.Screen
+              name="Dashboard"
+              component={getDashboardComponent(userContext.role, userContext.email)}
+            />
+          )
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="WorkerLogin" component={LoginScreen} />
+            <Stack.Screen name="EmployeeLogin" component={EmployeeLoginScreen} />
             <Stack.Screen name="EstablishmentLogin" component={EstablishmentLoginScreen} />
             <Stack.Screen name="DepartmentLogin" component={DepartmentLoginScreen} />
             <Stack.Screen name="WorkerRegistration" component={WorkerRegistrationScreen} />

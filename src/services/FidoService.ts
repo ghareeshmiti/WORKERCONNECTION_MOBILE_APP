@@ -2,6 +2,9 @@ import { NativeModules } from 'react-native';
 
 const { Fido2Nfc } = NativeModules;
 
+// For local debugging with ADB reverse
+// const BASE_URL = 'http://localhost:3000';
+// const BASE_URL = 'http://192.168.2.102:3000';
 const BASE_URL = 'https://workerconnection-backend.vercel.app';
 const API_URL = `${BASE_URL.replace(/\/$/, '')}/api`;
 
@@ -93,4 +96,24 @@ export const loginFinish = async (username: string, body: any, action: string | 
         body: JSON.stringify({ username, body, action, location }),
     });
     return handleResponse(res);
+};
+
+export const nfcLogin = async (uidHex: string, action: string | null = null, location: string | null = null) => {
+    const res = await fetch(`${API_URL}/auth/nfc-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uidHex, action, location }),
+    });
+    const data = await handleResponse(res);
+    // Server returns { session, user }
+    // User metadata contains worker_id
+    const workerId = data.worker?.worker_id || data.user?.user_metadata?.worker_id;
+    return {
+        verified: true,
+        username: workerId,
+        worker: data.worker,
+        session: data.session,
+        status: data.status,
+        message: data.message
+    };
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     TouchableOpacity,
     Text,
@@ -12,15 +12,24 @@ import {
     DeviceEventEmitter,
 } from 'react-native';
 import { authenticateUser, authenticateUserWithPin } from '../services/FidoService';
-import { useAuth } from '../lib/AuthContext';
 
 const { Fido2Nfc } = NativeModules;
 
-interface SmartCardLoginProps {
-    onLoadingChange?: (loading: boolean) => void;
+interface AttendanceCheckInProps {
+    establishmentName: string;
+    onCheckComplete?: () => void;
 }
 
-export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange }) => {
+interface CheckResult {
+    status: 'in' | 'out';
+    message: string;
+    username: string;
+}
+
+export const AttendanceCheckIn: React.FC<AttendanceCheckInProps> = ({
+    establishmentName,
+    onCheckComplete,
+}) => {
     const [loading, setLoading] = useState(false);
     const [showNfcModal, setShowNfcModal] = useState(false);
     const [showChoiceModal, setShowChoiceModal] = useState(false);
@@ -29,7 +38,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
     const [pinError, setPinError] = useState('');
     const [pinLoading, setPinLoading] = useState(false);
     const [nfcMessage, setNfcMessage] = useState('');
-    const { setSession } = useAuth();
+    const [result, setResult] = useState<CheckResult | null>(null);
 
     // Listen for NFC progress events from Kotlin
     useEffect(() => {
@@ -41,21 +50,22 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         return () => sub.remove();
     }, []);
 
-    const handleLogin = async () => {
+    const handleCheckInOut = async () => {
         setLoading(true);
+        setResult(null);
         setNfcMessage('Hold your FIDO Smart Card against the back of your phone.\nPlace your finger on the card sensor.');
         setShowNfcModal(true);
-        onLoadingChange?.(true);
         try {
-            const result = await authenticateUser('');
+            const res = await authenticateUser('', 'toggle', establishmentName);
             setShowNfcModal(false);
 
-            if (result.verified) {
-                if (result.session) {
-                    await setSession(result.session);
-                } else {
-                    Alert.alert('Success', `Welcome ${result.username}!`);
-                }
+            if (res.verified) {
+                setResult({
+                    status: res.status,
+                    message: res.message,
+                    username: res.username,
+                });
+                onCheckComplete?.();
             } else {
                 Alert.alert('Authentication Failed', 'Could not verify smart card.');
             }
@@ -63,21 +73,26 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             // Attempt fallback if UID is available from the FIDO2 error
             if (error.userInfo?.uid) {
                 try {
-                    console.log('Attempting fallback UID login...', error.userInfo.uid);
+                    console.log('Attempting fallback UID check-in...', error.userInfo.uid);
                     const { nfcLogin } = require('../services/FidoService');
-                    const fallbackResult = await nfcLogin(error.userInfo.uid);
-                    if (fallbackResult.verified && fallbackResult.session) {
+                    const res = await nfcLogin(error.userInfo.uid, 'toggle', establishmentName);
+                    if (res.verified) {
                         setShowNfcModal(false);
-                        await setSession(fallbackResult.session);
+                        setResult({
+                            status: res.status,
+                            message: res.message,
+                            username: res.username,
+                        });
+                        onCheckComplete?.();
                         return;
                     }
                 } catch (fbError) {
-                    console.warn('Fallback login failed:', fbError);
+                    console.warn('Fallback check-in failed:', fbError);
                 }
             }
             setShowNfcModal(false);
-            console.error('Smart Card Login Error:', error);
-            const msg = error.message || 'Smart card login failed.';
+            console.error('Attendance Check Error:', error);
+            const msg = error.message || 'Smart card authentication failed.';
             const code = error.code || '';
 
             if (code === 'BiometricFailed' || msg.includes('Fingerprint not matched')) {
@@ -91,13 +106,12 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             } else if (msg.includes('NotFido2')) {
                 Alert.alert('Wrong Card', 'This card does not support FIDO2.');
             } else if (msg.includes('No credentials')) {
-                Alert.alert('Not Registered', 'No credentials found. Please register first.');
+                Alert.alert('Not Registered', 'No credentials found on this card.');
             } else {
                 Alert.alert('Smart Card Error', msg);
             }
         } finally {
             setLoading(false);
-            onLoadingChange?.(false);
         }
     };
 
@@ -113,14 +127,15 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         setShowNfcModal(true);
 
         try {
-            const result = await authenticateUserWithPin('', pin);
+            const res = await authenticateUserWithPin('', pin, 'toggle', establishmentName);
             setShowNfcModal(false);
-            if (result.verified) {
-                if (result.session) {
-                    await setSession(result.session);
-                } else {
-                    Alert.alert('Success', `Welcome ${result.username}!`);
-                }
+            if (res.verified) {
+                setResult({
+                    status: res.status,
+                    message: res.message,
+                    username: res.username,
+                });
+                onCheckComplete?.();
             } else {
                 Alert.alert('Authentication Failed', 'Could not verify with PIN.');
             }
@@ -128,16 +143,21 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             // Attempt fallback if UID is available from the FIDO2 error
             if (error.userInfo?.uid) {
                 try {
-                    console.log('Attempting fallback UID login (PIN flow)...', error.userInfo.uid);
+                    console.log('Attempting fallback UID check-in (PIN)...', error.userInfo.uid);
                     const { nfcLogin } = require('../services/FidoService');
-                    const fallbackResult = await nfcLogin(error.userInfo.uid);
-                    if (fallbackResult.verified && fallbackResult.session) {
+                    const res = await nfcLogin(error.userInfo.uid, 'toggle', establishmentName);
+                    if (res.verified) {
                         setShowNfcModal(false);
-                        await setSession(fallbackResult.session);
+                        setResult({
+                            status: res.status,
+                            message: res.message,
+                            username: res.username,
+                        });
+                        onCheckComplete?.();
                         return;
                     }
                 } catch (fbError) {
-                    console.warn('Fallback login failed:', fbError);
+                    console.warn('Fallback check-in failed:', fbError);
                 }
             }
             setShowNfcModal(false);
@@ -168,7 +188,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
 
     const handleRetryFingerprint = () => {
         setShowChoiceModal(false);
-        handleLogin();
+        handleCheckInOut();
     };
 
     const handleChoosePin = () => {
@@ -191,26 +211,65 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         setPinLoading(false);
         setPin('');
         setPinError('');
-        onLoadingChange?.(false);
+    };
+
+    const dismissResult = () => {
+        setResult(null);
     };
 
     return (
-        <>
+        <View style={styles.container}>
+            {/* Status Card */}
+            <View style={styles.statusCard}>
+                <Text style={styles.statusIcon}>
+                    {result ? (result.status === 'in' ? '\u2705' : '\uD83D\uDC4B') : '\uD83D\uDCF3'}
+                </Text>
+                <Text style={styles.statusLabel}>
+                    {result ? (result.status === 'in' ? 'CHECKED IN' : 'CHECKED OUT') : 'READY'}
+                </Text>
+                <Text style={styles.locationText}>{establishmentName}</Text>
+            </View>
+
+            {/* Result Display */}
+            {result && (
+                <View style={[
+                    styles.resultCard,
+                    result.status === 'in' ? styles.resultCardIn : styles.resultCardOut,
+                ]}>
+                    <Text style={styles.resultIcon}>
+                        {result.status === 'in' ? '\u2705' : '\uD83D\uDC4B'}
+                    </Text>
+                    <Text style={styles.resultTitle}>
+                        {result.status === 'in' ? 'Successfully Checked In' : 'Successfully Checked Out'}
+                    </Text>
+                    <Text style={styles.resultWorker}>Worker: {result.username}</Text>
+                    <Text style={styles.resultTime}>
+                        {new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                    <TouchableOpacity style={styles.dismissButton} onPress={dismissResult}>
+                        <Text style={styles.dismissText}>OK</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {/* Check In/Out Button */}
             <TouchableOpacity
-                style={[styles.button, loading && styles.buttonDisabled]}
-                onPress={handleLogin}
+                style={[styles.tapButton, loading && styles.buttonDisabled]}
+                onPress={handleCheckInOut}
                 disabled={loading}
             >
                 {loading ? (
-                    <ActivityIndicator color="#ea580c" />
+                    <ActivityIndicator color="#fff" size="large" />
                 ) : (
                     <>
-                        <Text style={styles.icon}>💳</Text>
-                        <Text style={styles.buttonText}>Login with Smart Card</Text>
+                        <Text style={styles.tapIcon}>{'\uD83D\uDCB3'}</Text>
+                        <Text style={styles.tapButtonText}>Tap to Check In / Out</Text>
+                        <Text style={styles.tapSubtext}>Hold smart card with finger on sensor</Text>
                     </>
                 )}
             </TouchableOpacity>
 
+            {/* NFC Scanning Modal */}
             <Modal
                 visible={showNfcModal}
                 transparent
@@ -219,7 +278,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             >
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
-                        <Text style={styles.nfcIcon}>📡</Text>
+                        <Text style={styles.nfcIcon}>{'\uD83D\uDCE1'}</Text>
                         <Text style={styles.modalTitle}>Ready to Scan</Text>
                         <Text style={styles.modalText}>{nfcMessage}</Text>
                         <ActivityIndicator size="large" color="#ea580c" style={styles.spinner} />
@@ -272,7 +331,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             >
                 <View style={styles.modalOverlay}>
                     <View style={styles.pinModalContent}>
-                        <Text style={styles.pinIcon}>🔐</Text>
+                        <Text style={styles.pinIcon}>{'\uD83D\uDD10'}</Text>
                         <Text style={styles.modalTitle}>Enter Card PIN</Text>
                         {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
                         <TextInput
@@ -303,33 +362,120 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
                     </View>
                 </View>
             </Modal>
-        </>
+        </View>
     );
 };
 
 const styles = StyleSheet.create({
-    button: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
+    container: {
+        flex: 1,
+    },
+    statusCard: {
         backgroundColor: '#fff',
-        borderWidth: 2,
-        borderColor: '#ea580c',
+        borderRadius: 16,
+        padding: 24,
+        alignItems: 'center',
+        marginBottom: 16,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.08,
+        shadowRadius: 4,
+    },
+    statusIcon: {
+        fontSize: 48,
+        marginBottom: 8,
+    },
+    statusLabel: {
+        fontSize: 18,
+        fontWeight: '800' as const,
+        color: '#16a34a',
+        letterSpacing: 2,
+    },
+    locationText: {
+        fontSize: 13,
+        color: '#64748b',
+        marginTop: 8,
+    },
+    resultCard: {
+        borderRadius: 12,
+        padding: 20,
+        alignItems: 'center',
+        marginBottom: 16,
+        elevation: 3,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 6,
+    },
+    resultCardIn: {
+        backgroundColor: '#dcfce7',
+        borderWidth: 1,
+        borderColor: '#86efac',
+    },
+    resultCardOut: {
+        backgroundColor: '#fef3c7',
+        borderWidth: 1,
+        borderColor: '#fcd34d',
+    },
+    resultIcon: {
+        fontSize: 36,
+        marginBottom: 8,
+    },
+    resultTitle: {
+        fontSize: 18,
+        fontWeight: '700' as const,
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    resultWorker: {
+        fontSize: 14,
+        color: '#475569',
+        marginBottom: 2,
+    },
+    resultTime: {
+        fontSize: 13,
+        color: '#64748b',
+        marginBottom: 12,
+    },
+    dismissButton: {
+        backgroundColor: '#16a34a',
         borderRadius: 8,
-        padding: 16,
-        marginTop: 16,
+        paddingVertical: 8,
+        paddingHorizontal: 24,
+    },
+    dismissText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '600' as const,
+    },
+    tapButton: {
+        backgroundColor: '#ea580c',
+        borderRadius: 16,
+        padding: 24,
+        alignItems: 'center',
+        elevation: 4,
+        shadowColor: '#ea580c',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
     },
     buttonDisabled: {
         opacity: 0.6,
     },
-    icon: {
-        fontSize: 20,
-        marginRight: 8,
+    tapIcon: {
+        fontSize: 32,
+        marginBottom: 8,
     },
-    buttonText: {
-        color: '#ea580c',
-        fontSize: 16,
-        fontWeight: '600',
+    tapButtonText: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: '700' as const,
+    },
+    tapSubtext: {
+        color: '#fed7aa',
+        fontSize: 13,
+        marginTop: 4,
     },
     modalOverlay: {
         flex: 1,
@@ -351,14 +497,14 @@ const styles = StyleSheet.create({
     },
     modalTitle: {
         fontSize: 20,
-        fontWeight: '700',
+        fontWeight: '700' as const,
         color: '#1a1a1a',
         marginBottom: 8,
     },
     modalText: {
         fontSize: 15,
         color: '#666',
-        textAlign: 'center',
+        textAlign: 'center' as const,
         lineHeight: 22,
         marginBottom: 24,
     },
@@ -372,7 +518,7 @@ const styles = StyleSheet.create({
     cancelText: {
         color: '#ea580c',
         fontSize: 16,
-        fontWeight: '600',
+        fontWeight: '600' as const,
     },
     pinModalContent: {
         backgroundColor: '#fff',

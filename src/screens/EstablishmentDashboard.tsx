@@ -13,11 +13,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabase';
+import { AttendanceCheckIn } from '../components/AttendanceCheckIn';
 
-type TabKey = 'home' | 'workers' | 'attendance' | 'profile';
+type TabKey = 'home' | 'checkin' | 'workers' | 'attendance' | 'profile';
 
 const TABS: { key: TabKey; label: string; icon: string }[] = [
     { key: 'home', label: 'Home', icon: '🏠' },
+    { key: 'checkin', label: 'Check In/Out', icon: '📳' },
     { key: 'workers', label: 'Workers', icon: '👷' },
     { key: 'attendance', label: 'Attendance', icon: '📋' },
     { key: 'profile', label: 'Profile', icon: '🏢' },
@@ -342,6 +344,12 @@ export default function EstablishmentDashboard() {
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#ea580c']} />}
             >
                 {activeTab === 'home' && renderHome()}
+                {activeTab === 'checkin' && (
+                    <AttendanceCheckIn
+                        establishmentName={establishment?.name || userContext?.fullName || 'Unknown'}
+                        onCheckComplete={fetchData}
+                    />
+                )}
                 {activeTab === 'workers' && renderWorkers()}
                 {activeTab === 'attendance' && renderAttendance()}
                 {activeTab === 'profile' && renderProfile()}
