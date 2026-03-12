@@ -8,12 +8,12 @@ import {
     Image,
     RefreshControl,
     Platform,
-    SafeAreaView,
     Alert,
     Modal,
     Dimensions,
     TextInput,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../lib/AuthContext';
 import { supabase } from '../lib/supabase';
 import { WorkerProfile, AttendanceRecord } from '../types';
@@ -89,6 +89,7 @@ const SCHEMES_DATA = [
 
 
 export default function DashboardScreen() {
+    const insets = useSafeAreaInsets();
     const { userContext, signOut } = useAuth();
     const [profile, setProfile] = useState<WorkerProfile | null>(null);
     const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
@@ -1552,8 +1553,8 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
         borderTopWidth: 1,
         borderTopColor: '#e2e8f0',
-        paddingBottom: Platform.OS === 'ios' ? 20 : 0,
-        height: Platform.OS === 'ios' ? 80 : 60,
+        paddingTop: 8,
+        minHeight: 60,
         elevation: 8,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -2 },

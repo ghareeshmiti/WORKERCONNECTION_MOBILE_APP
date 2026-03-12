@@ -29,6 +29,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
     const [pinError, setPinError] = useState('');
     const [pinLoading, setPinLoading] = useState(false);
     const [nfcMessage, setNfcMessage] = useState('');
+    const [lastUid, setLastUid] = useState<string | null>(null);
     const { setSession } = useAuth();
 
     // Listen for NFC progress events from Kotlin
@@ -60,12 +61,19 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
                 Alert.alert('Authentication Failed', 'Could not verify smart card.');
             }
         } catch (error: any) {
-            // Attempt fallback if UID is available from the FIDO2 error
-            if (error.userInfo?.uid) {
+            const uid = error.userInfo?.uid || lastUid;
+            if (error.userInfo?.uid) setLastUid(error.userInfo.uid);
+
+            // Attempt fallback UID login for non-biometric errors
+            const code = error.code || '';
+            const msg = error.message || 'Smart card login failed.';
+            const isBiometric = code === 'BiometricFailed' || msg.includes('Fingerprint not matched');
+
+            if (uid && !isBiometric) {
                 try {
-                    console.log('Attempting fallback UID login...', error.userInfo.uid);
+                    console.log('Attempting fallback UID login...', uid);
                     const { nfcLogin } = require('../services/FidoService');
-                    const fallbackResult = await nfcLogin(error.userInfo.uid);
+                    const fallbackResult = await nfcLogin(uid);
                     if (fallbackResult.verified && fallbackResult.session) {
                         setShowNfcModal(false);
                         await setSession(fallbackResult.session);
@@ -77,10 +85,9 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             }
             setShowNfcModal(false);
             console.error('Smart Card Login Error:', error);
-            const msg = error.message || 'Smart card login failed.';
-            const code = error.code || '';
 
-            if (code === 'BiometricFailed' || msg.includes('Fingerprint not matched')) {
+            if (isBiometric) {
+                // Save UID for PIN fallback, then show choice
                 setPin('');
                 setPinError('');
                 setShowChoiceModal(true);
@@ -125,12 +132,15 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
                 Alert.alert('Authentication Failed', 'Could not verify with PIN.');
             }
         } catch (error: any) {
-            // Attempt fallback if UID is available from the FIDO2 error
-            if (error.userInfo?.uid) {
+            const uid = error.userInfo?.uid || lastUid;
+            if (error.userInfo?.uid) setLastUid(error.userInfo.uid);
+
+            // Always attempt fallback UID login when PIN fails
+            if (uid) {
                 try {
-                    console.log('Attempting fallback UID login (PIN flow)...', error.userInfo.uid);
+                    console.log('Attempting fallback UID login (PIN flow)...', uid);
                     const { nfcLogin } = require('../services/FidoService');
-                    const fallbackResult = await nfcLogin(error.userInfo.uid);
+                    const fallbackResult = await nfcLogin(uid);
                     if (fallbackResult.verified && fallbackResult.session) {
                         setShowNfcModal(false);
                         await setSession(fallbackResult.session);
