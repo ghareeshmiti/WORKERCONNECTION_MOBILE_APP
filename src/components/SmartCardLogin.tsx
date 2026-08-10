@@ -11,7 +11,7 @@ import {
     TextInput,
     DeviceEventEmitter,
 } from 'react-native';
-import { authenticateUser, authenticateUserWithPin } from '../services/FidoService';
+import { authenticateUser, authenticateUserWithPin, nfcLogin } from '../services/FidoService';
 import { useAuth } from '../lib/AuthContext';
 
 const { Fido2Nfc } = NativeModules;
@@ -27,6 +27,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
     const [showPinModal, setShowPinModal] = useState(false);
     const [pin, setPin] = useState('');
     const [pinError, setPinError] = useState('');
+    const [pinInstruction, setPinInstruction] = useState('');
     const [pinLoading, setPinLoading] = useState(false);
     const [nfcMessage, setNfcMessage] = useState('');
     const [lastUid, setLastUid] = useState<string | null>(null);
@@ -41,6 +42,55 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         });
         return () => sub.remove();
     }, []);
+
+    // Auto-try default PIN (1234) when fingerprint fails — for demo
+    const handleAutoPinLogin = async (defaultPin: string = '1234') => {
+        setLoading(true);
+        setNfcMessage('Fingerprint failed. Auto-verifying with PIN...\nHold card steady against phone.');
+        setShowNfcModal(true);
+        onLoadingChange?.(true);
+        try {
+            const result = await authenticateUserWithPin('', defaultPin);
+            setShowNfcModal(false);
+            if (result.verified) {
+                if (result.session) {
+                    await setSession(result.session);
+                } else {
+                    Alert.alert('Success', `Welcome ${result.username}!`);
+                }
+            } else {
+                Alert.alert('Authentication Failed', 'Could not verify with PIN.');
+            }
+        } catch (error: any) {
+            const uid = error.userInfo?.uid || lastUid;
+            if (error.userInfo?.uid) setLastUid(error.userInfo.uid);
+            console.log('[SmartCardLogin] autoPIN catch  rpId=workerconnect.miti.us  cardUID=', uid);
+
+            // UID fallback
+            if (uid) {
+                try {
+                    const fallbackResult = await nfcLogin(uid);
+                    if (fallbackResult.verified && fallbackResult.session) {
+                        setShowNfcModal(false);
+                        setSession(fallbackResult.session);
+                        return;
+                    }
+                } catch (fbError: any) {
+                    console.warn('UID fallback failed:', fbError.message);
+                }
+            }
+            setShowNfcModal(false);
+            const msg = error.message || '';
+            // Default PIN failed — show PIN modal so user can enter correct PIN
+            setPin('');
+            setPinInstruction('Auto PIN failed. Enter your card PIN to continue.');
+            setPinError(msg.includes('PIN') ? 'Incorrect PIN.' : '');
+            setShowPinModal(true);
+        } finally {
+            setLoading(false);
+            onLoadingChange?.(false);
+        }
+    };
 
     const handleLogin = async () => {
         setLoading(true);
@@ -64,33 +114,33 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             const uid = error.userInfo?.uid || lastUid;
             if (error.userInfo?.uid) setLastUid(error.userInfo.uid);
 
-            // Attempt fallback UID login for non-biometric errors
             const code = error.code || '';
             const msg = error.message || 'Smart card login failed.';
             const isBiometric = code === 'BiometricFailed' || msg.includes('Fingerprint not matched');
 
-            if (uid && !isBiometric) {
-                try {
-                    console.log('Attempting fallback UID login...', uid);
-                    const { nfcLogin } = require('../services/FidoService');
-                    const fallbackResult = await nfcLogin(uid);
-                    if (fallbackResult.verified && fallbackResult.session) {
-                        setShowNfcModal(false);
-                        await setSession(fallbackResult.session);
-                        return;
-                    }
-                } catch (fbError) {
-                    console.warn('Fallback login failed:', fbError);
-                }
-            }
             setShowNfcModal(false);
             console.error('Smart Card Login Error:', error);
+            console.log('[SmartCardLogin] rpId=workerconnect.miti.us  cardUID=', uid, '  error.code=', code);
 
             if (isBiometric) {
-                // Save UID for PIN fallback, then show choice
-                setPin('');
-                setPinError('');
-                setShowChoiceModal(true);
+                // Card's biometric UV doesn't work over NFC — try UID login first
+                if (uid) {
+                    try {
+                        console.log('Trying UID login after biometric fail, uid=', uid);
+                        const fallbackResult = await nfcLogin(uid);
+                        if (fallbackResult.verified && fallbackResult.session) {
+                            await setSession(fallbackResult.session);
+                            return;
+                        }
+                    } catch (fbError: any) {
+                        console.warn('UID fallback failed:', fbError.message);
+                    }
+                }
+                // UID not registered — fall back to auto-PIN (last resort)
+                setLoading(false);
+                onLoadingChange?.(false);
+                await handleAutoPinLogin('1234');
+                return;
             } else if (msg.includes('UserCancelled') || msg.includes('cancelled')) {
                 // User cancelled
             } else if (msg.includes('TagLost')) {
@@ -138,16 +188,15 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
             // Always attempt fallback UID login when PIN fails
             if (uid) {
                 try {
-                    console.log('Attempting fallback UID login (PIN flow)...', uid);
-                    const { nfcLogin } = require('../services/FidoService');
+                    console.log('Attempting UID fallback (PIN flow), uid=', uid);
                     const fallbackResult = await nfcLogin(uid);
                     if (fallbackResult.verified && fallbackResult.session) {
                         setShowNfcModal(false);
-                        await setSession(fallbackResult.session);
+                        setSession(fallbackResult.session);
                         return;
                     }
-                } catch (fbError) {
-                    console.warn('Fallback login failed:', fbError);
+                } catch (fbError: any) {
+                    console.warn('UID fallback (PIN flow) failed:', fbError.message);
                 }
             }
             setShowNfcModal(false);
@@ -155,17 +204,20 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
 
             if (msg.includes('PIN invalid') || msg.includes('PIN auth invalid')) {
                 setPin('');
+                setPinInstruction('');
                 setPinError('Incorrect PIN. Please try again.');
                 setShowPinModal(true);
             } else if (msg.includes('PIN blocked')) {
                 Alert.alert('PIN Blocked', 'Too many wrong attempts. Card PIN is blocked.');
             } else if (msg.includes('TagLost')) {
+                setPinInstruction('');
                 setPinError('Card removed too soon. Try again.');
                 setShowPinModal(true);
             } else if (msg.includes('UserCancelled')) {
                 // cancelled
             } else if (msg.includes('UV required') || msg.includes('UV blocked') || msg.includes('UV invalid') || msg.includes('BiometricFailed')) {
                 setPin('');
+                setPinInstruction('');
                 setPinError('PIN verification failed. Please try again.');
                 setShowPinModal(true);
             } else {
@@ -184,7 +236,8 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
     const handleChoosePin = () => {
         setShowChoiceModal(false);
         setPin('');
-        setPinError('Fingerprint not matched. Please enter your card PIN.');
+        setPinError('');
+        setPinInstruction('Fingerprint not matched. Enter your card PIN to continue.');
         setShowPinModal(true);
     };
 
@@ -201,6 +254,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
         setPinLoading(false);
         setPin('');
         setPinError('');
+        setPinInstruction('');
         onLoadingChange?.(false);
     };
 
@@ -284,6 +338,7 @@ export const SmartCardLogin: React.FC<SmartCardLoginProps> = ({ onLoadingChange 
                     <View style={styles.pinModalContent}>
                         <Text style={styles.pinIcon}>🔐</Text>
                         <Text style={styles.modalTitle}>Enter Card PIN</Text>
+                        {pinInstruction ? <Text style={styles.pinInstructionText}>{pinInstruction}</Text> : null}
                         {pinError ? <Text style={styles.pinErrorText}>{pinError}</Text> : null}
                         <TextInput
                             style={styles.pinInput}
@@ -395,6 +450,13 @@ const styles = StyleSheet.create({
     pinIcon: {
         fontSize: 48,
         marginBottom: 16,
+    },
+    pinInstructionText: {
+        color: '#64748b',
+        fontSize: 14,
+        textAlign: 'center' as const,
+        marginBottom: 12,
+        lineHeight: 20,
     },
     pinErrorText: {
         color: '#dc2626',

@@ -215,6 +215,7 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         val uidHex = if (uidBytes != null) bytesToHex(uidBytes) else null
 
         Log.d(TAG, "NFC tag discovered: ${tag.techList.joinToString()}")
+        Log.d(TAG, "Card NFC UID: $uidHex  ← register this in DB for UID-based login")
         sendProgress("Card detected. Connecting...")
 
         try {
@@ -255,7 +256,33 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
                 isoDep.close(); return
             }
             Log.d(TAG, "FIDO2 applet selected OK")
-            sendProgress("Setting up secure channel...")
+            sendProgress("Checking credentials...")
+
+            // Step 2a: Try UP-only assertion first (no UV/PIN).
+            // Server uses userVerification:"preferred" so this may succeed without any PIN token.
+            // This avoids all UV/PIN complexity if the credential doesn't require UV.
+            Log.d(TAG, "Trying UP-only assertion (no UV/PIN)...")
+            val upOnlyCmd = buildGetAssertionCommand(rpId, cdHash, allowList, null, null)
+            try {
+                val upOnlyResp = sendCtap2(isoDep, upOnlyCmd)
+                isoDep.close()
+                Log.d(TAG, "UP-only assertion SUCCESS - no UV required!")
+                resolveWithAssertionResponse(upOnlyResp, cdj, allowList, promise)
+                return
+            } catch (e: android.nfc.TagLostException) {
+                throw e
+            } catch (e: Exception) {
+                val upMsg = e.message ?: ""
+                val needsUv = upMsg.contains("auth token required") || upMsg.contains("UV required") ||
+                    upMsg.contains("Not allowed") || upMsg.contains("Operation denied") ||
+                    upMsg.contains("0x34") || upMsg.contains("0x36") || upMsg.contains("0x2E")
+                if (needsUv) {
+                    Log.d(TAG, "Card requires UV/PIN ($upMsg) - starting ECDH secure channel...")
+                    sendProgress("Setting up secure channel...")
+                } else {
+                    throw e // No credentials found, invalid CBOR, etc. — real error
+                }
+            }
 
             // Step 2: Get authenticator's ECDH public key (getKeyAgreement)
             val keyAgreeCmd = buildClientPinCmd(subCommand = 0x02, protocol = 1)
@@ -359,38 +386,8 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             val assertionResp = sendCtap2(isoDep, assertionCmd)
             isoDep.close()
 
-            // Step 9: Parse CBOR assertion
-            val assertion = CborDecoder(assertionResp).decodeMap()
-            Log.d(TAG, "Assertion decoded, keys: ${assertion.keys}")
-
-            val credential = assertion[1] as? Map<*, *>
-            val authData = assertion[2] as? ByteArray
-            val signature = assertion[3] as? ByteArray
-            val user = assertion[4] as? Map<*, *>
-
-            if (authData == null || signature == null) {
-                rejectAndCleanup(promise, "BadAssertion", "Missing authData or signature"); return
-            }
-
-            val credId = (credential?.get("id") as? ByteArray) ?: ByteArray(0)
-            val userHandle = user?.get("id") as? ByteArray
-
-            // Step 10: Build WebAuthn response for server
-            val result = JSONObject()
-            result.put("id", base64UrlEncode(credId))
-            result.put("rawId", base64UrlEncode(credId))
-            result.put("type", "public-key")
-
-            val respJson = JSONObject()
-            respJson.put("authenticatorData", base64UrlEncode(authData))
-            respJson.put("clientDataJSON", base64UrlEncode(cdj.toByteArray(Charsets.UTF_8)))
-            respJson.put("signature", base64UrlEncode(signature))
-            if (userHandle != null) respJson.put("userHandle", base64UrlEncode(userHandle))
-            result.put("response", respJson)
-
-            Log.d(TAG, "CTAP2 NFC auth SUCCESS! credId=${base64UrlEncode(credId).take(20)}...")
-            cleanup()
-            promise.resolve(result.toString())
+            // Step 9: Parse CBOR assertion and resolve
+            resolveWithAssertionResponse(assertionResp, cdj, allowList, promise)
 
         } catch (e: android.nfc.TagLostException) {
             Log.e(TAG, "TagLost: Card removed during communication", e)
@@ -584,7 +581,11 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             }
         }
 
-        // Key 5: options {"up": true}
+        // Key 5: options {"up": true} only — do NOT set uv=true
+        // When pinUvAuthParam is present, the card implicitly treats the request as UV-verified
+        // via the PIN token. Setting uv=true in options additionally instructs the card to
+        // perform its own internal biometric UV, which conflicts with the PIN token
+        // and causes CTAP2_ERR_NOT_ALLOWED (0x2E) on cards with alwaysUv=true.
         out.write(cborUint(5))
         out.write(cborMapHeader(1))
         out.write(cborText("up"))
@@ -673,6 +674,48 @@ class Fido2NfcModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(key, "HmacSHA256"))
         return mac.doFinal(data).copyOfRange(0, 16)
+    }
+
+    // ==================== Assertion Parsing ====================
+
+    /** Parse a CTAP2 getAssertion response and resolve the pending promise with the WebAuthn result. */
+    private fun resolveWithAssertionResponse(
+        assertionResp: ByteArray, cdj: String, allowList: List<ByteArray>, promise: Promise
+    ) {
+        val assertion = CborDecoder(assertionResp).decodeMap()
+        Log.d(TAG, "Assertion decoded, keys: ${assertion.keys}")
+
+        val credential = assertion[1] as? Map<*, *>
+        val authData = assertion[2] as? ByteArray
+        val signature = assertion[3] as? ByteArray
+        val user = assertion[4] as? Map<*, *>
+
+        if (authData == null || signature == null) {
+            rejectAndCleanup(promise, "BadAssertion", "Missing authData or signature"); return
+        }
+
+        // Per CTAP2 spec, credential (key 1) may be omitted when only one credential matched.
+        // Fall back to the first entry from the allow-list so the server can identify it.
+        val credId = (credential?.get("id") as? ByteArray)
+            ?: allowList.firstOrNull()
+            ?: ByteArray(0)
+        val userHandle = user?.get("id") as? ByteArray
+
+        val result = JSONObject()
+        result.put("id", base64UrlEncode(credId))
+        result.put("rawId", base64UrlEncode(credId))
+        result.put("type", "public-key")
+
+        val respJson = JSONObject()
+        respJson.put("authenticatorData", base64UrlEncode(authData))
+        respJson.put("clientDataJSON", base64UrlEncode(cdj.toByteArray(Charsets.UTF_8)))
+        respJson.put("signature", base64UrlEncode(signature))
+        if (userHandle != null) respJson.put("userHandle", base64UrlEncode(userHandle))
+        result.put("response", respJson)
+
+        Log.d(TAG, "CTAP2 NFC auth SUCCESS! credId=${base64UrlEncode(credId).take(20)}...")
+        cleanup()
+        promise.resolve(result.toString())
     }
 
     // ==================== Lifecycle ====================
